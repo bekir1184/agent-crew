@@ -4,8 +4,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Activity, Agent, AgentStatus, RecentTool, Step, Tokens, TouchedFile } from '../types'
 import {
   QUIET_TOOLS, SPRITE_CELLS, SPRITE_H, SPRITE_W, STALE_MS, activityOf, addUsage, barSvg, capAgents, clip, costOf, formatCost,
-  crewSummary, doingText, emptyTokens, statusLabel, fileOf, filesSummary, withFiles, estimateText, formatDuration, formatTokens, freshTokens, headerSvg, headline, layout,
-  learn, modelShort, redact, sanitizeHistory, statusText, shownProgress, spriteSvg, statusColor, stepsFromTodos, targetOf, textBar, DOT, dotColor,
+  crewSummary, doingText, emptyTokens, statusLabel, fileOf, filesSummary, withFiles, estimateText, formatDuration, formatTokens, workTokens, tokenText, sumTokens, cacheIsNotable, headerSvg, headline, layout,
+  learn, modelShort, modelLabel, redact, sanitizeHistory, statusText, shownProgress, spriteSvg, statusColor, stepsFromTodos, targetOf, textBar, DOT, dotColor, labelSvg, LABEL_W, LABEL_H,
   tree, typeColor, typeLabel, withActivity, withStepCreated, withStepUpdated,
 } from './draw'
 import type { History, Layout } from './draw'
@@ -90,6 +90,17 @@ let ticks = 0
 let stepsSinceTick = 0
 const DEAD_TICKER_STEPS = 30
 let demoTick: { cancel: () => void } | null = null
+/**
+ * A demo is on stage. Made for a screen recording, so meanwhile the prompt box shows the demo's
+ * own English hint instead of Claude Code's guess at your next message.
+ */
+let demoOnStage = false
+const DEMO_HINT = '/crew clear'
+/**
+ * On the desktop the band's text column is about twice as roomy as its reported width suggests:
+ * the task box grows to fill the row, so its text may use twice the planned cells before it is cut.
+ */
+const DESKTOP_TEXT_ROOM = 2
 
 /**
  * Terminal hotkeys, live once the band has the focus (ctrl+x tab): the title's arrow, then one
@@ -361,6 +372,7 @@ export const register: Register = (on, options) => {
     if (e.origin.kind !== 'composer') return next(e)
     const list = await read($, agents)
     if (list.length && !list.some(a => a.status === 'running')) {
+      demoOnStage = false
       await update($, agents, () => [])
       known.clear()
       pending.clear()
@@ -372,12 +384,19 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // While a demo is on stage, Claude Code's own prompt suggestion stays out of the recording;
+  // any other time, suggestions pass untouched
+  on('prompt.suggest', ($, e, next) => {
+    if (demoOnStage && e.origin?.kind === 'suggestion') return { isShown: false }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   // 6) /crew
   on('command.run', { command: 'crew' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
     if (arg === 'demo') {
       await startDemo($)
-      return { text: 'Demo crew on stage: 4 agents and 2 helpers for about 35 seconds.' }
+      return { text: 'Demo crew on stage: Claude starts alone, then 3 agents and a helper join, for about 30 seconds.' }
     }
     if (arg === 'clear') {
       await clearStage($)
@@ -411,7 +430,6 @@ export const register: Register = (on, options) => {
 
     const summary = crewSummary(list, now, history)
     const anyRunning = list.some(a => a.status === 'running')
-    const totalFresh = list.reduce((t, a) => t + freshTokens(a.tokens), 0)
     const runningHelpers = (id: string) => list.filter(a => a.parentId === id && a.status === 'running').length
     const crewCost = showCost ? sumCost(list) : null
     const hasCrew = list.length > 0
@@ -419,14 +437,14 @@ export const register: Register = (on, options) => {
     const mainCost = m && showCost ? costOf(m.model, m.tokens)?.total ?? null : null
     const right = hasCrew
       ? [
-          `${formatTokens(totalFresh + (working ? freshTokens(working.tokens) : 0))} tokens`,
+          tokenText(sumTokens([...list.map(a => a.tokens), ...(working ? [working.tokens] : [])]), 'tokens'),
           crewCost !== null ? formatCost(crewCost + (mainCost ?? 0)) : '',
           anyRunning ? `crew ~${formatDuration(summary.leftMs)} left` : '',
           `${Math.round(summary.share * 100)}%`,
         ].filter(Boolean).join('  ·  ')
       : [
           formatDuration((m!.endedAt ?? now) - m!.startedAt),
-          `${formatTokens(freshTokens(m!.tokens))} tokens`,
+          tokenText(m!.tokens, 'tokens'),
           mainCost !== null ? formatCost(mainCost) : '',
         ].filter(Boolean).join('  ·  ')
     const isCollapsed = await read($, collapsed)
@@ -436,7 +454,9 @@ export const register: Register = (on, options) => {
     const waitsOn = list.filter(a => !a.parentId && a.status === 'running').length
     const idle = working && (working.activity === 'thinking' || working.activity === 'starting') && !working.waitingFor
     const own = !working || crewAsks ? null : idle && waitsOn ? { main: 'Waiting', extra: `on ${waitsOn} agent${waitsOn > 1 ? 's' : ''}`, alert: false } : doingText(working, now, 0)
-    const room = Math.max(12, Math.floor(((e.props.bodyColumns || e.viewport?.columns || 120) - right.length - 26) * (Svg ? 0.75 : 1)))
+    // Claude's own model sits beside the title while it works
+    const ownModel = working ? modelLabel(working.model) : ''
+    const room = Math.max(12, Math.floor(((e.props.bodyColumns || e.viewport?.columns || 120) - right.length - 26 - ownModel.length) * (Svg ? 0.75 * DESKTOP_TEXT_ROOM : 1)))
     const said = own ? `${own.main}${own.extra ? `  ${oneLine(own.extra)}` : ''}` : headline(list, now)
 
     // The title row alone is framed, in Claude's own color; hiding and clearing live in /crew
@@ -451,6 +471,11 @@ export const register: Register = (on, options) => {
           <Box flexShrink={0}>
             <Text bold color="claude">{hasCrew ? 'AGENT CREW' : 'AGENT'}</Text>
           </Box>
+          {ownModel ? (
+            <Box flexShrink={0}>
+              <Text color="subtle">{ownModel}</Text>
+            </Box>
+          ) : null}
           <Text wrap="truncate-end" color={own?.alert ? 'warning' : undefined}>{clip(said, room)}</Text>
         </Box>
         <Box flexDirection="row" gap={2} alignItems="center" flexShrink={0}>
@@ -552,11 +577,12 @@ function desktopRow({ Box, Text, Svg, Button }: Els, r: RowData, L: Layout, barP
         </Box>
       ) : null}
       <Svg source={spriteSvg(a, now)} alt={`${typeLabel(a.type)}: ${doing.main}`} width={SPRITE_W} height={SPRITE_H} />
+      {/* The type, and under it the model the agent runs on, drawn small */}
       <Box width={L.type} flexShrink={0}>
-        <Text bold color={typeColor(a.type)}>{typeLabel(a.type)}</Text>
+        <Svg source={labelSvg(a.type, a.model)} alt={[typeLabel(a.type), modelLabel(a.model)].filter(Boolean).join(', ')} width={LABEL_W} height={LABEL_H} />
       </Box>
       <Box width={taskCells} flexGrow={1} flexShrink={0}>
-        <Text bold={!helper} dimColor={helper} wrap="truncate-end">{clip(a.description, taskCells - 1)}</Text>
+        <Text bold={!helper} dimColor={helper} wrap="truncate-end">{clip(a.description, (taskCells - 1) * DESKTOP_TEXT_ROOM)}</Text>
       </Box>
       <Box width={L.doing} flexShrink={0}>
         <Text wrap="truncate-end">
@@ -592,6 +618,7 @@ function terminalRow({ Box, Text, Button }: Els, r: RowData, L: Layout, onToggle
         <Text color="subtle">{helper ? `${'   '.repeat(depth - 1)} └ ` : ''}</Text>
         <Text color={dotColor(a)}>{`${DOT} `}</Text>
         <Text bold color={typeColor(a.type)}>{typeLabel(a.type).padEnd(L.type + 1)}</Text>
+        <Text color="subtle">{L.model ? (modelLabel(a.model) ? modelShort(a.model) : '').padEnd(L.model) : ''}</Text>
       </Text>
       <Box width={taskCells + 1} flexShrink={0}>
         <Text bold={!helper} dimColor={helper} wrap="truncate-end">{clip(a.description, taskCells - 1)}</Text>
@@ -619,7 +646,7 @@ function terminalRow({ Box, Text, Button }: Els, r: RowData, L: Layout, onToggle
 function thinLine({ Box, Text, Button }: Els, m: Agent, now: number, isOpen: boolean, onToggle: () => void, desktop: boolean, details: unknown) {
   const took = formatDuration((m.endedAt ?? now) - m.startedAt)
   const cost = showCost ? costOf(m.model, m.tokens) : null
-  const facts = [`last turn ${took}`, `${formatTokens(freshTokens(m.tokens))} tokens`, cost ? formatCost(cost.total) : '', `${m.tools} tool${m.tools === 1 ? '' : 's'}`].filter(Boolean).join('  ·  ')
+  const facts = [modelLabel(m.model), `last turn ${took}`, tokenText(m.tokens, 'tokens'), cost ? formatCost(cost.total) : '', `${m.tools} tool${m.tools === 1 ? '' : 's'}`].filter(Boolean).join('  ·  ')
   const line = (
     <Box key="main-line" flexDirection="row" justifyContent="space-between" alignItems="center" paddingX={1}>
       <Text wrap="truncate-end">
@@ -673,8 +700,17 @@ function detailsPanel({ Box, Text }: Els, r: RowData, now: number, indent: numbe
       {showCost ? costLine({ Text }, a) : null}
       <Text>
         <Text color="subtle">Tokens  </Text>
-        <Text>{`${formatTokens(freshTokens(t))} new`}</Text>
-        <Text color="subtle">{`  (input ${formatTokens(t.input)} · output ${formatTokens(t.output)} · cache write ${formatTokens(t.cacheWrite)})  ·  ${formatTokens(t.cacheRead)} re-read from cache`}</Text>
+        <Text>{formatTokens(workTokens(t))}</Text>
+        <Text color="subtle">{`  (input ${formatTokens(t.input)} · output ${formatTokens(t.output)})`}</Text>
+      </Text>
+      <Text>
+        <Text color="subtle">Cache   </Text>
+        <Text>{`${formatTokens(t.cacheWrite)} written · ${formatTokens(t.cacheRead)} re-read`}</Text>
+        <Text color="subtle">
+          {cacheIsNotable(t)
+            ? '  ·  after a pause the cache expires, and the next request writes the conversation to it again'
+            : '  ·  the conversation, kept by Claude between requests'}
+        </Text>
       </Text>
       <Text>
         <Text color="subtle">Run     </Text>
@@ -701,7 +737,7 @@ function fileLines({ Text }: Els, a: Agent) {
 
 /** The token column: new tokens, plus the ≈ cost when costs are on. */
 function tokenCell(a: Agent): string {
-  const tokens = `${formatTokens(freshTokens(a.tokens))} tok`
+  const tokens = tokenText(a.tokens)
   if (!showCost) return tokens
   const cost = costOf(a.model, a.tokens)
   return cost ? `${tokens} ${formatCost(cost.total)}` : tokens
@@ -899,6 +935,7 @@ async function remember($: EngineInterface, agent: Agent, ms: number) {
 async function clearStage($: EngineInterface) {
   demoTick?.cancel()
   demoTick = null
+  demoOnStage = false
   pending.clear()
   known.clear()
   closedTurn.clear()
@@ -911,15 +948,19 @@ async function clearStage($: EngineInterface) {
 
 // ── Demo ─────────────────────────────────────────────────────
 /** A fake crew to see the design without real subagents: it walks every activity and outcome. */
-type DemoStep = [Activity, string]
-type DemoAgent = { type: string; description: string; at: number; ms: number; end: AgentStatus; steps: DemoStep[]; parent?: number; todo?: string[] }
+// Timed for a short screen recording (about 30 seconds) and told as a story: Claude starts
+// alone, then three agents arrive one by one and a helper joins the last, few enough rows that
+// the whole band fits on screen. Every state shows up once, in order, and the crew ends with all
+// flags up. Each step gets an equal share of an agent's time after
+// its first two seconds. 'approval' is a running step that waits on the person.
+type DemoStep = [Activity | 'approval', string]
+type DemoAgent = { type: string; description: string; model: string; at: number; ms: number; end: AgentStatus; steps: DemoStep[]; parent?: number; todo?: string[] }
 const DEMO: DemoAgent[] = [
-  { type: 'Explore', description: 'Map the auth flow', at: 0, ms: 26_000, end: 'done', steps: [['thinking', ''], ['thinking', ''], ['searching', 'func login('], ['reading', 'AuthService.swift'], ['thinking', ''], ['thinking', ''], ['reading', 'KeychainStore.swift']] },
-  { type: 'general-purpose', description: 'Write and run the tests', at: 0, ms: 36_000, end: 'done', todo: ['Review existing tests', 'Prepare fixtures', 'Write login tests', 'Run the tests', 'Fix failures'], steps: [['thinking', ''], ['reading', 'AuthTests.swift'], ['writing', 'AuthTests.swift'], ['running', 'xcodebuild test -scheme App'], ['writing', 'AuthTests.swift'], ['running', 'xcodebuild test -scheme App']] },
-  { type: 'Plan', description: 'Plan the refactor', at: 0, ms: 30_000, end: 'failed', steps: [['reading', 'Package.swift'], ['thinking', ''], ['thinking', ''], ['thinking', ''], ['searching', 'protocol .*Service'], ['thinking', ''], ['thinking', '']] },
-  { type: 'general-purpose', description: 'Check the API docs', at: 0, ms: 20_000, end: 'cancelled', steps: [['web', 'developer.apple.com/documentation/foundation/urlsession'], ['reading', 'URLSession+Async.swift'], ['web', 'swift.org/documentation']] },
-  { type: 'Explore', description: 'Find mock data', at: 8_000, ms: 12_000, end: 'done', parent: 1, steps: [['searching', 'MockUser'], ['reading', 'Fixtures.swift']] },
-  { type: 'general-purpose', description: 'Write fixtures', at: 9_000, ms: 15_000, end: 'done', parent: 1, steps: [['writing', 'UserFixture.swift'], ['running', 'swift build']] },
+  // Claude starts alone on the AGENT line; the crew then arrives one by one
+  { type: 'Plan', description: 'Plan the refactor', model: 'claude-opus-5-5', at: 3_000, ms: 18_000, end: 'done', steps: [['thinking', ''], ['thinking', ''], ['approval', 'rm -r build'], ['approval', 'rm -r build'], ['running', 'rm -r build'], ['writing', 'PLAN.md']] },
+  { type: 'Explore', description: 'Map the auth flow', model: 'claude-haiku-5-5', at: 6_000, ms: 15_000, end: 'done', steps: [['searching', 'func login('], ['reading', 'AuthService.swift'], ['thinking', ''], ['thinking', ''], ['web', 'developer.apple.com/documentation/security'], ['reading', 'KeychainStore.swift']] },
+  { type: 'general-purpose', description: 'Write and run the tests', model: 'claude-sonnet-5-5', at: 9_000, ms: 21_000, end: 'done', todo: ['Review existing tests', 'Prepare fixtures', 'Write login tests', 'Run the tests', 'Fix failures'], steps: [['reading', 'AuthTests.swift'], ['writing', 'AuthTests.swift'], ['thinking', ''], ['thinking', ''], ['running', 'swift test'], ['writing', 'AuthTests.swift'], ['running', 'swift test']] },
+  { type: 'Explore', description: 'Find mock data', model: 'claude-haiku-5-5', at: 12_000, ms: 10_000, end: 'done', parent: 2, steps: [['searching', 'MockUser'], ['reading', 'Fixtures.swift'], ['thinking', ''], ['reading', 'Fixtures.swift']] },
 ]
 
 const DEMO_TOOL: Record<Activity, string> = { starting: '', thinking: '', searching: 'Grep', reading: 'Read', writing: 'Edit', running: 'Bash', web: 'WebFetch' }
@@ -927,7 +968,7 @@ const DEMO_TOOL: Record<Activity, string> = { starting: '', thinking: '', search
 async function startDemo($: EngineInterface) {
   const t0 = await $.clock.now()
   const crew: Agent[] = DEMO.map((d, i) => ({
-    id: `demo-${i}`, type: d.type, description: d.description, model: 'demo', status: 'running', activity: 'starting', target: '',
+    id: `demo-${i}`, type: d.type, description: d.description, model: d.model, status: 'running', activity: 'starting', target: '',
     activityAt: t0, seenAt: t0, startedAt: t0 + d.at, tokens: emptyTokens(), tools: 0, requests: 0, demo: true, expectedMs: d.ms,
     parentId: d.parent !== undefined ? `demo-${d.parent}` : undefined,
   }))
@@ -939,7 +980,7 @@ async function startDemo($: EngineInterface) {
   await update($, agents, list => [...list.filter(a => !a.demo), ...crew.filter((_, i) => DEMO[i].at === 0)])
   // Claude's own line on the title: it reads a file, then waits on its crew. A real turn keeps its own.
   const demoMain: Agent = {
-    id: MAIN_ID, type: 'main', description: 'Refactor the login flow', model: 'demo', status: 'running', activity: 'reading', target: 'LoginView.swift',
+    id: MAIN_ID, type: 'main', description: 'Refactor the login flow', model: 'claude-opus-5-5', status: 'running', activity: 'reading', target: 'LoginView.swift',
     activityAt: t0, seenAt: t0, startedAt: t0, tokens: emptyTokens(), tools: 1, requests: 1, demo: true,
   }
   if (showMain) await update($, main, m => (m && !m.demo ? m : demoMain))
@@ -963,7 +1004,9 @@ async function startDemo($: EngineInterface) {
           more = true
           if (elapsed < 2000) return { ...a, seenAt: now, tokens: addUsage(a.tokens, { input_tokens: 300, output_tokens: 40 }) }
           const share = (elapsed - 2000) / (d.ms - 2000)
-          const [activity, target] = d.steps[Math.min(d.steps.length - 1, Math.floor(share * d.steps.length))]
+          const [step, target] = d.steps[Math.min(d.steps.length - 1, Math.floor(share * d.steps.length))]
+          const asking = step === 'approval'
+          const activity: Activity = asking ? 'running' : step
           // The demo agent with a to-do list completes its steps in order
           const steps = d.todo?.map((label, i) => {
             const k = Math.floor(share * d.todo!.length)
@@ -974,6 +1017,7 @@ async function startDemo($: EngineInterface) {
           const call = changed && activity !== 'thinking' ? [{ label: clip(`${DEMO_TOOL[activity]} ${target}`.trim(), 80) }] : []
           return {
             ...withActivity(a, activity, target, now),
+            waitingFor: asking ? `Bash ${target}` : undefined,
             files: file.length ? withFiles(a.files ?? [], file) : a.files,
             recent: call.length ? [...(a.recent ?? []), ...call].slice(-RECENT_TOOLS) : a.recent,
             seenAt: now,
@@ -1004,4 +1048,7 @@ async function startDemo($: EngineInterface) {
     })()
   })
   demoTick = timer
+  // The demo's own hint replaces whatever suggestion the box was showing
+  demoOnStage = true
+  await $.prompt.suggest({ text: DEMO_HINT }).catch(() => undefined)
 }

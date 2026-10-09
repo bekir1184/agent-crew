@@ -6,6 +6,32 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-09
+
+### Added
+
+- Each row names the model its agent runs on, under the type ("Opus 5.5",
+  "Haiku 4.5"); Claude's own model sits beside the title, and the terminal
+  shows a short name when there is room.
+
+### Changed
+
+- `/crew demo` is a 30-second show timed for a screen recording: Claude starts
+  alone, then three agents arrive one by one and a helper joins, so the band
+  fits on screen; the crew works, thinks, one agent asks for approval, and
+  everyone ends with a flag.
+- While the demo is on stage, the prompt box shows the demo's own English hint
+  (`/crew clear`) instead of Claude Code's guess at your next message, so a
+  recording shows nothing personal; suggestions are untouched otherwise.
+- The type and model under it are drawn small on the desktop, and a row's task
+  text uses the room the row really has instead of being cut early.
+- The README is shorter and visual, led by a recording of the demo, with an
+  animated image per feature; a small site (`site/`) shows the same.
+- Token figures on rows, the title and the thin line count only the work
+  itself, input and output. Cache writes and re-reads have their own line in
+  the details panel, so a long conversation picked up after its cache expired
+  no longer shows a sudden jump of hundreds of thousands of tokens.
+
 ## [0.2.0] - 2026-10-09
 
 ### Added
@@ -85,7 +111,8 @@ All notable changes to this project are documented here. The format follows
   never retired. Resumed subagents run again. Every hook falls back to Claude
   Code's own behavior on error.
 
-[Unreleased]: https://github.com/bekir1184/agent-crew/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/bekir1184/agent-crew/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/bekir1184/agent-crew/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bekir1184/agent-crew/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/bekir1184/agent-crew/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/bekir1184/agent-crew/releases/tag/v0.1.0

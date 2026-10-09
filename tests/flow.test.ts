@@ -104,8 +104,10 @@ async function world($: Engine, on: On, listed: () => { id: string; status: stri
   on('classic.PermissionDenied', () => ({}))
   on('classic.SessionStart', () => ({}))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  // What each model request reports; a test may change it
+  const usage = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-haiku-5-5' }
   on('turn.step', async function* ($, e) {
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-haiku-5-5' } }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], usage: { ...usage } }
   })
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
   if (spawn) await $.agent.spawn({ prompt: 'p', description: 'Long build', subagentType: 'Explore' })
@@ -128,7 +130,7 @@ async function world($: Engine, on: On, listed: () => { id: string; status: stri
     await ui.unmount()
     return shown
   }
-  return { clock, step, complete, tool, status, saved, redraws }
+  return { clock, step, complete, tool, status, saved, redraws, usage }
 }
 
 test('a quiet agent the engine still lists as running is never retired', async ($, on) => {
@@ -394,5 +396,20 @@ test('a new crew starts with its rows open, even if the last one was folded away
   await w.clock.advance(1_000)
   expect(await ui.find({ key: 'open-a1' })).toBeDefined()
   expect(await ui.find({ key: 'collapse' })).toMatchObject({ props: { label: '▾' } })
+  await ui.unmount()
+})
+
+test('a request that rebuilds the cache leaves the row alone; the details show the cache', async ($, on) => {
+  const w = await world($, on, () => [{ id: 'a1', status: 'running' }])
+  w.usage.cache_creation_input_tokens = 768_000
+  w.usage.cache_read_input_tokens = 2_000
+  await w.step('t1', 0)
+  await w.clock.advance(1_000)
+  const ui = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
+  expect(await ui.find({ type: 'Text', text: /^15 tok$/ })).toBeDefined() // input and output only
+  expect(await ui.find({ type: 'Text', text: /cache/ })).toBeUndefined()
+  await ui.press({ key: 'open-a1' })
+  expect(await ui.find({ type: 'Text', text: /^768\.0k written · 2\.0k re-read$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /cache expires/ })).toBeDefined()
   await ui.unmount()
 })

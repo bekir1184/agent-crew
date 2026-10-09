@@ -1,6 +1,6 @@
 {
   "name": "agent-crew",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Shows your subagents above the prompt as pixel-art Claude crew members: what each one is doing, how far along it is and how many tokens it used.",
   "author": {
     "name": "Bekir Ersever",
