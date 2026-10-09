@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Activity, Agent, AgentStatus, Step, Tokens } from '../types'
 import {
-  ARROW_PX, QUIET_TOOLS, SPRITE_CELLS, SPRITE_H, SPRITE_W, STALE_MS, activityOf, addUsage, arrowSvg, barSvg, capAgents, clip,
+  QUIET_TOOLS, SPRITE_CELLS, SPRITE_H, SPRITE_W, STALE_MS, activityOf, addUsage, barSvg, capAgents, clip,
   crewSummary, doingText, emptyTokens, estimateText, formatDuration, formatTokens, freshTokens, headerSvg, headline, layout,
   learn, modelShort, sanitizeHistory, shownProgress, spriteSvg, statusColor, stepsFromTodos, targetOf, textBar, textFace,
   tree, typeColor, typeLabel, withActivity, withStepCreated, withStepUpdated,
@@ -67,13 +67,8 @@ let stepsSinceTick = 0
 const DEAD_TICKER_STEPS = 30
 let demoTick: { cancel: () => void } | null = null
 
-/**
- * A desktop row is exactly this many text rows tall, with the 34 px sprite centered in it.
- * Its click layer is a Client, which counts rows in the code font, whose lines are shorter
- * (about 15 px against 21): three of those just cover the two text rows.
- */
+/** A desktop row is exactly this many text rows tall, with the 34 px sprite centered in it. */
 const ROW_ROWS = 2
-const HIT_ROWS = 3
 /** Silent this long and missing from the engine's agent list: the agent is gone. */
 const GONE_MS = 30_000
 
@@ -265,18 +260,7 @@ export const register: Register = on => {
     return { text: wasHidden ? 'Agent Crew is visible.' : 'Agent Crew hidden. Run /crew to show it again.' }
   }).catch(() => ({ text: 'Agent Crew ran into an error. Run claude --debug for details.' }))
 
-  // 7) A click on a row, posted by its row-hit layer as the state it asks for. Setting a state
-  // (not flipping one) makes a repeated message harmless; the answer hands the layer its new
-  // props at once, before the next redraw.
-  on('ui.message', async ($, e, next) => {
-    const data = e.data as { id?: unknown; open?: unknown } | null
-    // Only a row's own layer may open that row
-    if (typeof data?.id !== 'string' || typeof data.open !== 'boolean' || data.id.length > 200 || e.element !== `hit-${data.id}`) return next(e)
-    await setOpen($, data.id, data.open)
-    return { props: { id: data.id, open: data.open } }
-  }).catch(($, e, next) => next(e))
-
-  // 8) Drawing: one aligned row per agent, helpers indented below their parent
+  // 7) Drawing: one aligned row per agent, helpers indented below their parent
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // Cheap checks first: while hidden, the drawing doesn't subscribe to the agent list
     const isHidden = await read($, hidden)
@@ -289,8 +273,6 @@ export const register: Register = on => {
     const { Box, Text, Button } = els
     // The terminal's table has an Svg key too, but draws it as an empty box: decide by surface
     const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : undefined
-    // The click layer: terminal and desktop draw a Client; other surfaces fall back to the arrow
-    const Client = 'Client' in els ? els.Client : undefined
     const now = await $.clock.now()
     // bodyColumns leaves out the engine's own marks and a docked pane: the room the band really has
     const L = layout(e.props.bodyColumns || e.viewport?.columns || 120, !!Svg)
@@ -302,20 +284,15 @@ export const register: Register = on => {
     const runningHelpers = (id: string) => list.filter(a => a.parentId === id && a.status === 'running').length
     const right = `${formatTokens(totalFresh)} tokens${anyRunning ? `  ·  crew ~${formatDuration(summary.leftMs)} left` : ''}  ·  ${Math.round(summary.share * 100)}%`
 
+    // The title row alone is framed, in Claude's own color; hiding and clearing live in /crew
     const header = (
-      <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+      <Box flexDirection="row" justifyContent="space-between" alignItems="center" borderStyle="round" borderColor="claude" paddingX={1}>
         <Box flexDirection="row" gap={1} alignItems="center" flexShrink={1}>
           {Svg ? <Svg source={headerSvg(!anyRunning)} alt="Agent Crew" width={SPRITE_W} height={SPRITE_H} /> : null}
           <Text bold color="claude">AGENT CREW</Text>
           <Text wrap="truncate-end">{headline(list, now)}</Text>
         </Box>
-        <Box flexDirection="row" gap={2} alignItems="center" flexShrink={0}>
-          <Text color="subtle">{right}</Text>
-          <Box flexDirection="row" gap={1}>
-            <Button key="clear" label="Clear" onPress={() => clearStage($)} />
-            <Button key="hide" label="Hide" onPress={() => update($, hidden, () => true)} />
-          </Box>
-        </Box>
+        <Text color="subtle">{right}</Text>
       </Box>
     )
 
@@ -330,16 +307,12 @@ export const register: Register = on => {
         doing: doingText(a, now, runningHelpers(a.id)),
         color: statusColor(a),
       }
-      const hitLayer = Client ? (
-        <Box position="absolute" top={0} left={0} right={0} bottom={0}>
-          <Client key={`hit-${a.id}`} module="./row-hit.tsx" props={{ id: a.id, open: isOpen }} width="100%" height={Svg ? HIT_ROWS : 1} />
-        </Box>
-      ) : null
+      const toggle = () => setOpen($, a.id, !isOpen)
       const line = Svg
-        ? desktopRow({ Box, Text, Svg }, row, L, barPx, now, hitLayer)
-        : terminalRow({ Box, Text, Button }, row, L, hitLayer, () => setOpen($, a.id, !isOpen))
-      // Every row lives in the same wrapper, open or not, so its click layer is never torn down
-      // by a toggle. Open, the wrapper frames the row and its details in dashed yellow.
+        ? desktopRow({ Box, Text, Svg, Button }, row, L, barPx, now, toggle)
+        : terminalRow({ Box, Text, Button }, row, L, toggle)
+      // Every row lives in the same wrapper, open or not, so a toggle never rebuilds the row.
+      // Open, the wrapper frames the row and its details in dashed yellow.
       return (
         <Box key={`${a.id}-wrap`} flexDirection="column" borderStyle={isOpen ? 'dashed' : undefined} borderColor={isOpen ? 'warning' : undefined}>
           {line}
@@ -374,17 +347,22 @@ type RowData = {
 
 const oneLine = (s: string) => s.replace(/\s+/g, ' ')
 
-function desktopRow({ Box, Text, Svg }: Els, r: RowData, L: Layout, barPx: number, now: number, hitLayer: unknown) {
+function desktopRow({ Box, Text, Svg, Button }: Els, r: RowData, L: Layout, barPx: number, now: number, onToggle: () => void) {
   const { a, depth, isOpen, share, est, doing, color } = r
   const helper = depth > 0
   const indent = depth * 3
   // An open row sits inside a dashed frame, which takes a cell on each side
   const taskCells = Math.max(8, L.task - (helper ? indent + 1 : 0) - (isOpen ? 2 : 0))
-  // The desktop's proportional font runs a little wider than its cells: the "doing" text keeps 20% spare
-  const extraChars = Math.max(4, Math.floor(L.doing * 0.8) - doing.main.length - 2)
+  // The desktop's proportional (and bold) font runs wider than its cells: the "doing" text plans with
+  // 75% of the column, so it never wraps to a second line. The bold part comes first; the target only
+  // shows when at least four characters of it fit.
+  const doingChars = Math.floor(L.doing * 0.75)
+  const mainText = clip(doing.main, doingChars)
+  const extraRoom = doingChars - mainText.length - 2
+  const extraText = doing.extra && extraRoom >= 4 ? `  ${clip(oneLine(doing.extra), extraRoom)}` : ''
   const running = a.status === 'running'
   return (
-    <Box key={a.id} flexDirection="row" gap={1} alignItems="center" height={ROW_ROWS} paddingRight={1} hover={{ backgroundColor: '#8080801f' }}>
+    <Box key={a.id} flexDirection="row" gap={1} alignItems="center" height={ROW_ROWS} paddingRight={1}>
       {helper ? (
         <Box width={indent} justifyContent="flex-end" flexShrink={0}>
           <Text color="subtle">└</Text>
@@ -394,13 +372,13 @@ function desktopRow({ Box, Text, Svg }: Els, r: RowData, L: Layout, barPx: numbe
       <Box width={L.type} flexShrink={0}>
         <Text bold color={typeColor(a.type)}>{typeLabel(a.type)}</Text>
       </Box>
-      <Box width={taskCells} flexShrink={0}>
+      <Box width={taskCells} flexGrow={1} flexShrink={0}>
         <Text bold={!helper} dimColor={helper} wrap="truncate-end">{clip(a.description, taskCells - 1)}</Text>
       </Box>
       <Box width={L.doing} flexShrink={0}>
         <Text wrap="truncate-end">
-          <Text bold color={color.theme}>{doing.main}</Text>
-          <Text color="subtle">{doing.extra ? `  ${clip(oneLine(doing.extra), extraChars)}` : ''}</Text>
+          <Text bold color={color.theme}>{mainText}</Text>
+          <Text color="subtle">{extraText}</Text>
         </Text>
       </Box>
       <Svg source={barSvg(share, color.raw, running, barPx, L.barCells, 7)} alt={`${Math.round(share * 100)} percent`} width={barPx} height={7} />
@@ -415,15 +393,13 @@ function desktopRow({ Box, Text, Svg }: Els, r: RowData, L: Layout, barPx: numbe
           <Text color="subtle">{formatTokens(freshTokens(a.tokens))} tok</Text>
         </Box>
       ) : null}
-      {/* The disclosure arrow sits flush right: grey and pointing right, yellow and down when open */}
-      <Box flexGrow={1} />
-      <Svg source={arrowSvg(isOpen)} alt={isOpen ? 'Close details' : 'Open details'} width={ARROW_PX} height={ARROW_PX} />
-      {hitLayer}
+      {/* The disclosure arrow ends the row: a button, so it works by click and by keyboard */}
+      <Button key={`open-${a.id}`} label={isOpen ? '▾' : '▸'} onPress={onToggle} />
     </Box>
   )
 }
 
-function terminalRow({ Box, Text, Button }: Els, r: RowData, L: Layout, hitLayer: unknown, onToggle: () => void) {
+function terminalRow({ Box, Text, Button }: Els, r: RowData, L: Layout, onToggle: () => void) {
   const { a, depth, isOpen, share, est, doing, color } = r
   const helper = depth > 0
   const taskCells = Math.max(8, L.task - (helper ? depth * 3 + 1 : 0) - (isOpen ? 2 : 0))
@@ -444,9 +420,7 @@ function terminalRow({ Box, Text, Button }: Els, r: RowData, L: Layout, hitLayer
         <Text>{est.main.padEnd(L.eta)}</Text>
         <Text color="subtle">{L.showTokens ? `${formatTokens(freshTokens(a.tokens))} tok`.padEnd(L.tokens) : ''}</Text>
       </Text>
-      {/* Not every terminal reports the pointer: the arrow is also a button the keyboard reaches */}
       <Button key={`open-${a.id}`} label={isOpen ? '▾' : '▸'} plain onPress={onToggle} />
-      {hitLayer}
     </Box>
   )
 }

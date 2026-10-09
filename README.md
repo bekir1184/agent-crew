@@ -45,13 +45,13 @@ AGENT CREW  2 agents working, 1 helper working              12.4k tokens · crew
 - **The critter shows the activity.** It holds the tool for what the agent is doing: a magnifier, a page, a code window, a laptop, a globe or an hourglass. When the agent finishes it raises a checkered flag. A failed agent gets dizzy eyes, a cancelled one falls asleep.
 - **Helpers.** A subagent started by another subagent appears indented under its parent, and the parent's row says it is waiting on it.
 - **Real steps when available.** If an agent keeps a to-do list (`TodoWrite`, `TaskCreate`, `TaskUpdate`), the bar follows its actual steps ("Step 3/5").
-- **Details on demand.** Click anywhere on a row to open a panel under it with:
+- **Details on demand.** Press the arrow at the end of a row to open a panel under it with:
   - the full task and target
   - the step list
   - a token breakdown
   - the model, and the tool and request counts
 
-  The arrow turns from ▸ to ▾ while the panel is open; click again to close it. Only one panel is open at a time, and the open row and its panel get a dashed yellow frame. In the terminal the arrow is also a button, for keyboards and for terminals that don't report the mouse.
+  The arrow turns from ▸ to ▾ while the panel is open; press it again to close it. Only one panel is open at a time, and the open row and its panel get a dashed yellow frame. The arrow is a regular button, so it works with the keyboard too.
 - **Fits your theme.** Text is drawn with Claude Code's own elements and theme colors; the agent types keep their own accent colors so they stay recognizable. The critters, bars and arrows are pixel-art SVG.
 - **Calm by design.** The short thinking pauses between tool calls don't make the critter flicker. "Thinking" shows only once it lasts longer than 1.5 seconds.
 
@@ -65,7 +65,7 @@ Works in the desktop app's Code tab and in the terminal. The terminal draws the 
 | `/crew demo` | Put a demo crew on stage (4 agents and 2 helpers, every outcome) to see the design |
 | `/crew clear` | Clear the stage |
 
-When everyone has finished, the crew leaves the stage with your next message. **Hide** hides only the current crew; the next one shows again. The stage holds up to 12 agents; past that, finished ones make room first.
+When everyone has finished, the crew leaves the stage with your next message. Hiding with `/crew` hides only the current crew; the next one shows again. The stage holds up to 12 agents; past that, finished ones make room first.
 
 ## How the numbers work
 
@@ -102,8 +102,7 @@ agent-crew/
 ├── hooks/
 │   ├── hooks.json         points to register.tsx
 │   ├── register.tsx       the hooks: session.start, agent.spawn, tool.call, turn.step,
-│   │                      turn.complete, prompt.submit, ui.message, ui.render, /crew
-│   ├── row-hit.tsx        a transparent layer over each row that turns a click into open/close
+│   │                      turn.complete, prompt.submit, ui.render, /crew
 │   └── draw.ts            pure logic and pixel art, no engine dependency
 ├── types/index.d.ts       the $.state contract
 ├── tests/                 run by `claude plugin test`

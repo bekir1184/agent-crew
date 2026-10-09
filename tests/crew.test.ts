@@ -29,30 +29,21 @@ test('the demo crew draws on every surface, progresses and finishes', async ($, 
   expect(await desk.find({ type: 'Svg' })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /^\d+(\.\d)?k? tok$/ })).toBeDefined()
 
-  // A click anywhere on a row opens it (the row's hit layer posts to the plugin); again closes it
-  await desk.pointer({ type: 'down', x: 4, y: 0, button: 'left', in: 'hit-demo-1' })
+  // The arrow button opens a row's details
+  await desk.press({ key: 'open-demo-1' })
   expect(await desk.find({ type: 'Text', text: /re-read from cache/ })).toBeDefined()
   expect(await desk.find({ type: 'Text', text: /\[x\]|\[>\]/ })).toBeDefined()
-  expect(JSON.stringify(await desk.drawn())).toContain('Close details') // the arrow turned down
+  expect(await desk.find({ key: 'open-demo-1' })).toMatchObject({ props: { label: '▾' } }) // the arrow turned down
 
-  // Press and release both arrive: the second asks for the same state, so the row stays open
-  await desk.pointer({ type: 'up', x: 4, y: 0, button: 'left', in: 'hit-demo-1' })
-  expect(await desk.find({ type: 'Text', text: /re-read from cache/ })).toBeDefined()
-
-  // Accordion: opening another row closes the first
-  await desk.pointer({ type: 'down', x: 4, y: 0, button: 'left', in: 'hit-demo-0' })
+  // Opening another row closes the first: one panel at a time
+  await desk.press({ key: 'open-demo-0' })
   expect(await desk.find({ type: 'Text', text: /^Map the auth flow$/ })).toBeDefined() // the full task, in the panel
   expect(await desk.find({ type: 'Text', text: /\[x\]|\[>\]/ })).toBeUndefined()
-  await desk.pointer({ type: 'down', x: 4, y: 0, button: 'left', in: 'hit-demo-0' })
-  await desk.pointer({ type: 'up', x: 4, y: 0, button: 'left', in: 'hit-demo-0' })
-  expect(await desk.find({ type: 'Text', text: /re-read from cache/ })).toBeUndefined()
 
-  // A release whose press was swallowed still closes an open row
-  await desk.pointer({ type: 'down', x: 4, y: 0, button: 'left', in: 'hit-demo-0' })
-  await desk.pointer({ type: 'up', x: 4, y: 0, button: 'left', in: 'hit-demo-0' })
-  expect(await desk.find({ type: 'Text', text: /re-read from cache/ })).toBeDefined()
-  await desk.pointer({ type: 'up', x: 4, y: 0, button: 'left', in: 'hit-demo-0' })
+  // Pressing it again closes it
+  await desk.press({ key: 'open-demo-0' })
   expect(await desk.find({ type: 'Text', text: /re-read from cache/ })).toBeUndefined()
+  expect(await desk.find({ key: 'open-demo-0' })).toMatchObject({ props: { label: '▸' } })
   await desk.unmount()
 
   // Run the demo twice and clear early: no doubled timers, and helpers don't reappear on a cleared stage
@@ -79,7 +70,7 @@ test('the demo crew draws on every surface, progresses and finishes', async ($, 
   expect(await end.find({ type: 'Text', text: /^Done$/ })).toBeDefined()
   expect(await end.find({ type: 'Text', text: /^Failed$/ })).toBeDefined()
   expect(await end.find({ type: 'Text', text: /Cancelled/ })).toBeDefined()
-  await end.press({ key: 'hide' })
+  await $.command.run({ command: 'crew', args: '', ...RUN }) // hide
   expect(await end.find({ type: 'Text', text: /AGENT CREW/ })).toBeUndefined()
   await end.unmount()
 })
