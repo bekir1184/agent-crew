@@ -1,6 +1,6 @@
 {
   "name": "agent-crew",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Shows your subagents above the prompt as pixel-art Claude crew members: what each one is doing, how far along it is and how many tokens it used.",
   "author": {
     "name": "Bekir Ersever",
@@ -17,5 +17,19 @@
     "ui",
     "mod"
   ],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "showMain": {
+      "type": "boolean",
+      "title": "Show Claude's own work",
+      "description": "While Claude works in the main conversation, the framed AGENT line shows what it is doing, for how long and its tokens. Subagents join below it. With it off, the band appears only for subagents.",
+      "default": true
+    },
+    "showCost": {
+      "type": "boolean",
+      "title": "Show estimated cost",
+      "description": "Show a ≈ dollar estimate next to each agent's tokens and for the whole crew, from the tokens it used and Anthropic's list prices. An estimate: it can differ from your bill.",
+      "default": false
+    }
+  }
 }

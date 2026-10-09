@@ -133,11 +133,77 @@ test('a parent waiting on a helper says so', async () => {
 })
 
 test('a row always fits its width; tokens stay until the surface is very narrow', async () => {
-  const width = (L: ReturnType<typeof layout>) => FIXED_EXTRAS + L.type + L.task + L.doing + L.pct + L.eta + L.barCells + (L.showTokens ? L.tokens : 0)
+  const width = (L: ReturnType<typeof layout>, extra = 0) => FIXED_EXTRAS + extra + L.type + L.task + L.doing + L.pct + L.eta + L.barCells + (L.showTokens ? L.tokens : 0)
   for (let columns = 90; columns <= 220; columns += 5) {
     // The desktop lays cells out wider than it reports, so a desktop row keeps 6% free
     expect(width(layout(columns, true))).toBeLessThanOrEqual(Math.floor(columns * 0.94))
-    expect(width(layout(columns, false))).toBeLessThanOrEqual(columns)
+    expect(width(layout(columns, false), -1)).toBeLessThanOrEqual(columns) // dot four cells narrower, hotkey three wider
     if (columns >= 95) expect(layout(columns, true).showTokens).toBe(true)
   }
+})
+
+import { costOf, formatCost, priceOf, redact } from '../hooks/draw'
+
+test('secrets are masked; ordinary text is left alone', async () => {
+  expect(redact('curl -H "Authorization: Bearer sk-ant-api03-abcdefghijkl" https://x.io?token=abc123secret')).toBe('curl -H "Authorization: Bearer •••" https://x.io?token=•••')
+  expect(redact('git clone https://ghp_abcdefghijklmnopqrstuvwx@github.com/a/b')).toBe('git clone https://•••@github.com/a/b')
+  expect(redact('mysql --password=hunter22 db')).toBe('mysql --password=••• db')
+  expect(redact('grep -rn password src/')).toBe('grep -rn password src/')
+  expect(redact('echo $TOKEN')).toBe('echo $TOKEN')
+})
+
+test('costs follow each model family, cache reads included at their own price', async () => {
+  expect(priceOf('claude-fable-5-1')?.cacheRead).toBe(0.25) // not Fable 5's $1
+  expect(priceOf('claude-opus-5-5')?.input).toBe(4)
+  expect(priceOf('some-other-model')).toBeNull()
+  const c = costOf('claude-sonnet-5-5', { input: 1_000_000, output: 100_000, cacheWrite: 100_000, cacheRead: 1_000_000 })
+  expect(Math.abs((c?.total ?? 0) - (2 + 1 + 0.25 + 0.2)) < 1e-9).toBe(true)
+  expect(formatCost(0.001)).toBe('≈$0.00')
+  expect(formatCost(1.234)).toBe('≈$1.23')
+})
+
+import { fileOf, filesSummary, withFiles } from '../hooks/draw'
+
+test('touched files: relative to the project, one entry each, a change sticks', async () => {
+  expect(fileOf('Read', { file_path: '/work/src/a.ts' }, '/work')).toEqual({ path: 'src/a.ts' })
+  expect(fileOf('Edit', { file_path: '/etc/hosts' }, '/work')).toEqual({ path: '/etc/hosts', changed: true })
+  expect(fileOf('NotebookEdit', { notebook_path: '/work/n.ipynb' }, '/work/')).toEqual({ path: 'n.ipynb', changed: true })
+  expect(fileOf('Grep', { pattern: 'x', path: '/work' }, '/work')).toBeNull()
+  expect(fileOf('Read', {}, '/work')).toBeNull()
+  let files = withFiles([], [{ path: 'a.ts' }, { path: 'b.ts', changed: true }])
+  files = withFiles(files, [{ path: 'b.ts' }, { path: 'a.ts', changed: true }, { path: 'c.ts' }])
+  expect(filesSummary(files)).toEqual({ changed: ['a.ts', 'b.ts'], read: ['c.ts'] })
+  const many = withFiles([], Array.from({ length: 50 }, (_, i) => ({ path: `f${i}` })))
+  expect(many.length).toBe(40)
+  expect(many[0].path).toBe('f10')
+})
+
+import { dotColor } from '../hooks/draw'
+
+test("the terminal's dot color tells the state", async () => {
+  const colors = new Set(['running', 'done', 'failed', 'cancelled'].map(s => dotColor({ status: s as never })))
+  expect(colors.size).toBe(4)
+  expect(dotColor({ status: 'running', waitingFor: 'Bash' })).not.toBe(dotColor({ status: 'running' }))
+})
+
+import { FRAME_MS, SCENE_MS, THINKING_SCENES, thinkingScene } from '../hooks/draw'
+
+test('a thinking crew member moves through scenes, each agent at its own place', async () => {
+  const a = agent({ id: 'x', activity: 'thinking', activityAt: 0, prevActivity: 'thinking' })
+  const seen = new Set(Array.from({ length: THINKING_SCENES.length }, (_, i) => thinkingScene(a, i * SCENE_MS + 1)))
+  expect(seen.size).toBe(THINKING_SCENES.length) // every scene comes round
+  expect(thinkingScene(a, 1)).toBe(thinkingScene(a, SCENE_MS - 1)) // a scene holds for its time
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f'].map(id => thinkingScene({ id, activityAt: 0 }, 1))
+  expect(new Set(ids).size).toBeGreaterThan(1) // a crew isn't in step
+  // A scene's frames come from the clock, one a second: each redraw shows the next one
+  for (let i = 0; i < THINKING_SCENES.length; i++) {
+    const t = i * SCENE_MS + 1
+    if (thinkingScene(a, t) === 'hourglass') continue
+    const frames = [0, 1, 2].map(f => spriteSvg(a, t + f * FRAME_MS))
+    expect(new Set(frames).size).toBe(3)
+    expect(frames[0]).not.toContain('@keyframes f')
+  }
+  // Waiting on the person always shows the question bubble, never a scene
+  const asking = { ...a, waitingFor: 'Bash' }
+  expect(spriteSvg(asking, 1)).toBe(spriteSvg(asking, 1 + FRAME_MS))
 })

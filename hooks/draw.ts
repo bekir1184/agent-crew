@@ -2,7 +2,7 @@
 // Text is not drawn here: the surface's own Text elements draw it, full size and in
 // your theme. This file only produces the crew member sprites and the progress bar.
 
-import type { Activity, Agent, AgentStatus, Step, Tokens } from '../types'
+import type { Activity, Agent, AgentStatus, Step, Tokens, TouchedFile } from '../types'
 
 // ── Palette (inside SVGs; colors that read on light and dark themes) ──
 const C = {
@@ -84,6 +84,73 @@ export function addUsage(t: Tokens, u: { input_tokens: number; output_tokens: nu
   }
 }
 
+// ── Cost (optional; off by default) ──────────────────────────
+// Anthropic's first-party list prices in USD per million tokens (October 2026). Cache writes are
+// priced as 5-minute writes (1.25× input); the API's usage doesn't say which TTL each write used,
+// so every figure built on this is an estimate and is shown with "≈".
+type Price = { input: number; output: number; cacheRead: number }
+const PRICES: [string, Price][] = [
+  // Longest names first: "claude-fable-5-1" must win over "claude-fable-5"
+  ['fable-5-1', { input: 10, output: 50, cacheRead: 0.25 }],
+  ['mythos-5-1', { input: 10, output: 50, cacheRead: 0.25 }],
+  ['fable-5', { input: 10, output: 50, cacheRead: 1 }],
+  ['mythos-5', { input: 10, output: 50, cacheRead: 1 }],
+  ['opus-5-5', { input: 4, output: 20, cacheRead: 0.2 }],
+  ['opus-5', { input: 5, output: 25, cacheRead: 0.5 }],
+  ['opus-4', { input: 5, output: 25, cacheRead: 0.5 }],
+  ['sonnet-5-5', { input: 2, output: 10, cacheRead: 0.2 }],
+  ['sonnet-5', { input: 2, output: 10, cacheRead: 0.2 }],
+  ['sonnet-4', { input: 3, output: 15, cacheRead: 0.3 }],
+  ['haiku-5-5', { input: 0.1, output: 0.5, cacheRead: 0.01 }],
+  ['haiku-4', { input: 1, output: 5, cacheRead: 0.1 }],
+]
+
+/** The list price for a model id, or null for a model the table doesn't know. */
+export function priceOf(model: string): Price | null {
+  const id = model.toLowerCase()
+  return PRICES.find(([key]) => id.includes(key))?.[1] ?? null
+}
+
+export type Cost = { total: number; input: number; output: number; cacheWrite: number; cacheRead: number }
+
+/** The estimated cost of an agent's tokens in USD, or null when the model's price is unknown. */
+export function costOf(model: string, t: Tokens): Cost | null {
+  const p = priceOf(model)
+  if (!p) return null
+  const m = 1_000_000
+  const input = (t.input * p.input) / m
+  const output = (t.output * p.output) / m
+  const cacheWrite = (t.cacheWrite * p.input * 1.25) / m
+  const cacheRead = (t.cacheRead * p.cacheRead) / m
+  return { total: input + output + cacheWrite + cacheRead, input, output, cacheWrite, cacheRead }
+}
+
+export function formatCost(usd: number): string {
+  if (usd < 0.005) return '≈$0.00'
+  if (usd < 10) return `≈$${usd.toFixed(2)}`
+  return `≈$${usd.toFixed(1)}`
+}
+
+// ── Secrets ──────────────────────────────────────────────────
+// A command or URL an agent runs can carry a key. Targets and descriptions are masked before
+// they are stored or drawn, so a token never sits in state or on screen.
+const SECRET_PATTERNS: RegExp[] = [
+  /\b(sk-(?:ant-)?[A-Za-z0-9_-]{8,})/g, // Anthropic / OpenAI style keys
+  /\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, // GitHub tokens
+  /\b(xox[abprs]-[A-Za-z0-9-]{10,})/g, // Slack tokens
+  /\b(AKIA[0-9A-Z]{16})\b/g, // AWS access key ids
+  /\b(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,})/g, // JWTs
+]
+// A key word followed by "=" or ":" (password=…, Authorization: Bearer …), or a bare "Bearer …".
+// A key word alone is not a secret: `grep -rn password src/` stays as it is.
+const SECRET_ASSIGNMENT = /((?:api[_-]?key|access[_-]?token|token|secret|password|passwd|pwd|authorization)["']?\s*[=:]\s*(?:bearer\s+)?["']?|\bbearer\s+)([^\s"'&;,]{4,})/gi
+
+export function redact(text: string): string {
+  let out = text.replace(SECRET_ASSIGNMENT, (_m, lead: string) => `${lead}•••`)
+  for (const re of SECRET_PATTERNS) out = out.replace(re, '•••')
+  return out
+}
+
 const ACTIVITY_LABEL: Record<Activity, string> = {
   starting: 'Getting ready',
   thinking: 'Thinking',
@@ -94,7 +161,7 @@ const ACTIVITY_LABEL: Record<Activity, string> = {
   web: 'Browsing',
 }
 
-function statusLabel(a: Agent): string {
+export function statusLabel(a: Agent): string {
   if (a.status === 'done') return 'Done'
   if (a.status === 'failed') return 'Failed'
   if (a.status === 'cancelled') return 'Cancelled'
@@ -126,7 +193,45 @@ export function targetOf(tool: string, input: Record<string, unknown>): string {
     : tool.startsWith('mcp__') ? (tool.split('__').pop() ?? tool)
     : tool
   // Bounded: a one-line `python -c` can be kilobytes, and this string is stored and redrawn
-  return clip(arg.split('\n')[0].trim(), 160)
+  return clip(redact(arg.split('\n')[0].trim()), 160)
+}
+
+// ── Files ────────────────────────────────────────────────────
+/** How many files an agent remembers; past that the oldest go first. */
+export const MAX_FILES = 40
+const READS = new Set(['Read'])
+const CHANGES = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+
+/** The file a tool call read or changed, or null for every other call. */
+export function fileOf(tool: string, input: Record<string, unknown>, cwd = ''): TouchedFile | null {
+  if (!READS.has(tool) && !CHANGES.has(tool)) return null
+  const raw = input[tool === 'NotebookEdit' ? 'notebook_path' : 'file_path']
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  const path = clip(redact(relativePath(raw.trim(), cwd)), 160)
+  return CHANGES.has(tool) ? { path, changed: true } : { path }
+}
+
+/** A path under the project, shown from the project folder; anything else, as it is. */
+export function relativePath(path: string, cwd: string): string {
+  const root = cwd.replace(/\/+$/, '')
+  return root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path
+}
+
+/** Adds touched files: one entry per path, moved to the newest place, changed once stays changed. */
+export function withFiles(list: readonly TouchedFile[], touched: readonly TouchedFile[]): TouchedFile[] {
+  let out = [...list]
+  for (const f of touched) {
+    const old = out.find(o => o.path === f.path)
+    out = out.filter(o => o.path !== f.path)
+    out.push(old?.changed || f.changed ? { path: f.path, changed: true } : { path: f.path })
+  }
+  return out.slice(-MAX_FILES)
+}
+
+/** The details panel's file lists, newest first. */
+export function filesSummary(files: readonly TouchedFile[]): { changed: string[]; read: string[] } {
+  const newest = [...files].reverse()
+  return { changed: newest.filter(f => f.changed).map(f => f.path), read: newest.filter(f => !f.changed).map(f => f.path) }
 }
 
 // ── Estimates ────────────────────────────────────────────────
@@ -306,9 +411,12 @@ export const FIXED_EXTRAS = 6 + 9 + 4 + 1
  */
 const DESKTOP_BUDGET = 0.94
 
-export function layout(columns: number, desktop = true): Layout {
-  const budget = Math.floor(columns * (desktop ? DESKTOP_BUDGET : 1))
-  const base = { type: 8, pct: 5, eta: 11, tokens: 10 }
+export function layout(columns: number, desktop = true, showCost = false): Layout {
+  // The terminal's dot and its space take two cells where the desktop sprite takes six, and its
+  // arrow carries a hotkey ("a: ▸"), three cells more
+  const budget = Math.floor(columns * (desktop ? DESKTOP_BUDGET : 1)) + (desktop ? 0 : 6 - 2 - 3)
+  // With costs on, the token column also holds "≈$0.04"
+  const base = { type: 8, pct: 5, eta: 11, tokens: showCost ? 17 : 10 }
   let barCells = 14
   let showTokens = true
   const flexible = () => budget - FIXED_EXTRAS - base.type - base.pct - base.eta - barCells - (showTokens ? base.tokens : 0)
@@ -378,15 +486,30 @@ export function shownActivity(a: Agent, now: number): { activity: Activity; targ
   return { activity: a.activity, target: a.target }
 }
 
-/** The row's "doing" column: a step when there is a list, otherwise the activity and its target. */
-export function doingText(a: Agent, now: number, runningHelpers: number): { main: string; extra: string } {
+/** A tool call running this long gets its time shown next to it. */
+export const SLOW_TOOL_MS = 30_000
+/** An agent with no event for this long is marked quiet. */
+export const QUIET_MS = 120_000
+
+/**
+ * The row's "doing" column: an approval the agent waits on comes first; then a step when there
+ * is a list, otherwise the activity and its target. A slow tool call shows its time, and a long
+ * silence says so: health signals that don't depend on the time estimate.
+ * `alert` asks the row to draw the main part in the warning color.
+ */
+export function doingText(a: Agent, now: number, runningHelpers: number): { main: string; extra: string; alert?: boolean } {
   if (a.status !== 'running') return { main: statusLabel(a), extra: '' }
+  if (a.waitingFor) return { main: 'Needs approval', extra: a.waitingFor, alert: true }
   const steps = stepSummary(a)
   const shown = shownActivity(a, now)
-  const waiting = runningHelpers > 0 ? `waiting on ${runningHelpers} helper${runningHelpers > 1 ? 's' : ''}` : ''
-  if (steps) return { main: `Step ${Math.min(steps.total, steps.done + 1)}/${steps.total}`, extra: waiting || steps.current || ACTIVITY_LABEL[shown.activity] }
-  if (waiting) return { main: 'Waiting', extra: waiting.replace('waiting ', '') }
-  return { main: ACTIVITY_LABEL[shown.activity], extra: shown.target }
+  const helpers = runningHelpers > 0 ? `waiting on ${runningHelpers} helper${runningHelpers > 1 ? 's' : ''}` : ''
+  const quietFor = now - a.seenAt
+  if (!helpers && quietFor > QUIET_MS) return { main: 'Quiet', extra: `no activity for ${formatDuration(quietFor)}`, alert: true }
+  const busyFor = now - a.activityAt
+  const slow = shown.activity !== 'thinking' && shown.activity !== 'starting' && busyFor > SLOW_TOOL_MS ? `${formatDuration(busyFor)} · ` : ''
+  if (steps) return { main: `Step ${Math.min(steps.total, steps.done + 1)}/${steps.total}`, extra: helpers || steps.current || ACTIVITY_LABEL[shown.activity] }
+  if (helpers) return { main: 'Waiting', extra: helpers.replace('waiting ', '') }
+  return { main: ACTIVITY_LABEL[shown.activity], extra: `${slow}${shown.target}` }
 }
 
 /** The header sentence: the crew's state at a glance. */
@@ -400,12 +523,26 @@ export function headline(list: readonly Agent[], now: number): string {
   }
   const top = running.filter(a => !isHelper(a))
   const helperText = helpers ? `, ${helpers} helper${helpers > 1 ? 's' : ''} working` : ''
+  const approvals = running.filter(a => a.waitingFor).length
+  if (approvals) return `${approvals} agent${approvals > 1 ? 's need' : ' needs'} your approval`
   if (top.length === 1) {
     const a = top[0]
     const d = doingText(a, now, 0)
     return `${a.description}: ${d.main.toLowerCase()}${helperText}`
   }
   return `${top.length} agents working${helperText}`
+}
+
+/** The one-line summary for Claude Code's status line, shown while the crew is hidden. */
+export function statusText(list: readonly Agent[], now: number, h: History, cost: number | null): string | undefined {
+  if (list.length === 0) return undefined
+  const running = list.filter(a => a.status === 'running')
+  const approvals = running.filter(a => a.waitingFor).length
+  const parts = [running.length ? `${running.length} working` : `${list.length} done`]
+  if (approvals) parts.push(`${approvals} need${approvals > 1 ? '' : 's'} approval`)
+  if (running.length) parts.push(`~${formatDuration(crewSummary(list, now, h).leftMs)} left`)
+  if (cost !== null) parts.push(formatCost(cost))
+  return `Agent Crew: ${parts.join(' · ')}`
 }
 
 /** Deeper helpers are drawn at this depth: the indent stops growing, the rows stay. */
@@ -472,7 +609,6 @@ const KEYFRAMES: Record<string, string> = {
   l2: '0%,40%{opacity:0}40.1%,100%{opacity:1}',
   l3: '0%,65%{opacity:0}65.1%,100%{opacity:1}',
   read: '0%{transform:translateY(0)}33%{transform:translateY(4px)}66%{transform:translateY(8px)}100%{transform:translateY(0)}',
-  flip: '0%,70%{transform:rotate(0)}70.1%,100%{transform:rotate(180deg)}',
   spin: '0%,49.9%{transform:translateX(0)}50%,100%{transform:translateX(2px)}',
   stars: '0%,33%{transform:translateX(0)}33.1%,66%{transform:translateX(6px)}66.1%,100%{transform:translateX(12px)}',
   zzz: '0%{transform:translate(0,0);opacity:0}20%{opacity:1}100%{transform:translate(4px,-6px);opacity:0}',
@@ -491,7 +627,6 @@ const CLASSES: Record<string, [string, string]> = {
   l2: ['l2', 'l2 2.4s steps(1,end) infinite'],
   l3: ['l3', 'l3 2.4s steps(1,end) infinite'],
   read: ['read', 'read 1.8s steps(1,end) infinite'],
-  flip: ['flip', 'flip 2s steps(1,end) infinite;transform-box:fill-box;transform-origin:center'],
   sparkA: ['on', 'on 1.4s steps(1,end) infinite'],
   sparkB: ['off', 'off 1.4s steps(1,end) infinite'],
   spin: ['spin', 'spin 1.6s steps(1,end) infinite'],
@@ -535,7 +670,10 @@ function memo<K>(cache: Map<K, string>, key: K, make: () => string): string {
 // Accessories sit on the right (x14..21) or above the head.
 const U = 2
 
-function creature(a: Agent): string {
+/** How a thinking crew member holds itself in a scene's frame. */
+type Pose = { lookUp?: boolean }
+
+function creature(a: Agent, pose: Pose = {}): string {
   const u = U
   const running = a.status === 'running'
   const done = a.status === 'done'
@@ -549,7 +687,8 @@ function creature(a: Agent): string {
 
   // Body and claws; when done, the right claw is up holding the flag
   let torso = px(u, 3, 5, 10, 7, body) + px(u, 2, 7, 1, 2, body)
-  torso += done ? px(u, 13, 3, 1, 3, body) : px(u, 13, 7, 1, 2, body)
+  if (done) torso += px(u, 13, 3, 1, 3, body)
+  else torso += px(u, 13, 7, 1, 2, body)
 
   let face = ''
   if (done) {
@@ -559,8 +698,8 @@ function creature(a: Agent): string {
   } else if (a.status === 'cancelled') {
     face = px(u, 4, 8, 2, 1, C.eye) + px(u, 9, 8, 2, 1, C.eye) // asleep: - -
   } else {
-    const side = a.activity !== 'thinking' && a.activity !== 'starting' ? 1 : 0
-    const ey = a.activity === 'thinking' ? 6 : 7
+    const side = a.activity !== 'thinking' && a.activity !== 'starting' && !a.waitingFor ? 1 : 0
+    const ey = a.activity === 'thinking' || a.waitingFor || pose.lookUp ? 6 : 7
     const open = px(u, 5 + side, ey, 1, 2, C.eye) + px(u, 10 + side, ey, 1, 2, C.eye)
     const shut = px(u, 5 + side, ey + 1, 1, 1, C.eye) + px(u, 10 + side, ey + 1, 1, 1, C.eye)
     face = `<g class="eye">${open}</g><g class="eyeShut">${shut}</g>`
@@ -575,6 +714,63 @@ function creature(a: Agent): string {
   return s + `<g${motion}>${torso}${face}${hat}</g>`
 }
 
+// ── Thinking scenes ──────────────────────────────────────────
+// Thinking is the most common state, so it isn't always the hourglass: a crew member keeps
+// taking turns between the hourglass, a thought cloud and a lightbulb, each three frames long.
+export const THINKING_SCENES = ['hourglass', 'cloud', 'idea'] as const
+export type ThinkingScene = (typeof THINKING_SCENES)[number]
+/** How long one scene plays before the next: one loop of its three frames, so they keep taking turns. */
+export const SCENE_MS = 3000
+
+/** One frame of a scene lasts a second. */
+export const FRAME_MS = 1000
+
+/**
+ * The scene a thinking crew member plays now, and which of its three frames. Each agent starts
+ * at its own scene, so a crew isn't in step. The frame comes from the clock, not from a CSS
+ * animation: the band redraws every second, and a redraw restarts an SVG's animations, so a
+ * three-second CSS sequence would never get past its first frame.
+ */
+export function thinkingScene(a: Pick<Agent, 'id' | 'activityAt'>, now: number): ThinkingScene {
+  return THINKING_SCENES[(seedOf(a.id) + Math.floor(sinceThinking(a, now) / SCENE_MS)) % THINKING_SCENES.length]
+}
+export function sceneFrame(a: Pick<Agent, 'activityAt'>, now: number): 0 | 1 | 2 {
+  return (Math.floor(sinceThinking(a, now) / FRAME_MS) % 3) as 0 | 1 | 2
+}
+const sinceThinking = (a: Pick<Agent, 'activityAt'>, now: number) => Math.max(0, now - (a.activityAt ?? 0))
+function seedOf(id: string | undefined): number {
+  let seed = 0
+  for (const ch of id ?? '') seed = (seed * 31 + ch.charCodeAt(0)) >>> 0
+  return seed
+}
+
+const framed = (body: string, transform = '') => (transform ? `<g transform="${transform}">${body}</g>` : body)
+const dots = (pts: [number, number][], color: string = C.white) => pts.map(([x, y]) => px(U, x, y, 1, 1, color)).join('')
+
+/** One frame of a scene, the crew member drawn in it. */
+function sceneSvg(a: Agent, scene: ThinkingScene, n: 0 | 1 | 2): string {
+  const u = U
+  switch (scene) {
+    case 'cloud': {
+      // A thought cloud grows over the head and a question mark appears in it
+      const rising = dots([[14, 3], [16, 2]])
+      const cloud = pixels(u, 16, -2, ['.####.', '######', '.####.'], { '#': C.white })
+      const big = pixels(u, 14, -2, ['..#####..', '.#######.', '#########', '.#######.', '..#####..'], { '#': C.white })
+      const mark = pixels(u, 17, -2, ['.##.', '...#', '..#.', '....', '..#.'], { '#': C.yellowDark })
+      return [creature(a, { lookUp: true }) + rising, creature(a, { lookUp: true }) + rising + cloud, creature(a, { lookUp: true }) + px(u, 13, 4, 1, 1, C.white) + big + mark][n]
+    }
+    case 'idea': {
+      // A bulb appears over the head, lights up, and the crew member hops
+      const outline = pixels(u, 6, -1, ['.##.', '#..#', '#..#', '.##.', '.##.'], { '#': C.white })
+      const lit = pixels(u, 6, -1, ['.##.', '####', '####', '.##.'], { '#': C.yellow }) + px(u, 7, 3, 2, 1, C.greyDark)
+      const rays = dots([[4, 0], [11, 0], [3, 2], [12, 2]], C.yellow)
+      return [creature(a), creature(a, { lookUp: true }) + outline, framed(creature(a, { lookUp: true }) + lit + rays, 'translate(0 -2)')][n]
+    }
+    default:
+      return accessory(a) + creature(a)
+  }
+}
+
 /** The checkered finish flag, held up by the right claw, waving in two frames. */
 function finishFlag(): string {
   const u = U
@@ -584,9 +780,15 @@ function finishFlag(): string {
   return `<g class="cheer">${pole}<g class="waveA">${check(0)}</g><g class="waveB">${check(1)}</g></g>`
 }
 
-function accessory(a: Agent): string {
+function accessory(a: Agent, flipped = false): string {
   const u = U
   if (a.status === 'done') return finishFlag()
+  if (a.waitingFor && a.status === 'running') {
+    // A yellow question bubble over the head: it waits on the person
+    const bubble = pixels(u, 14, 0, ['.#####.', '#######', '###.###', '####.##', '###.###', '#######', '.#####.', '..#....'], { '#': C.yellow, '.': '' })
+    const mark = pixels(u, 14, 0, ['.......', '..###..', '.#...#.', '....#..', '...#...', '.......', '...#...'], { '#': C.ink })
+    return `<g class="sparkA">${bubble}${mark}</g><g class="sparkB">${bubble}${mark}</g>`
+  }
   if (a.status === 'failed') {
     const stars = `<g class="stars">${px(u, 3, 2, 1, 1, C.yellow)}${px(u, 6, 1, 1, 1, C.yellowDark)}</g>`
     return stars + px(u, 16, 3, 5, 6, C.red) + px(u, 18, 4, 1, 2, C.white) + px(u, 18, 7, 1, 1, C.white) + px(u, 18, 9, 1, 3, C.greyDark)
@@ -616,7 +818,8 @@ function accessory(a: Agent): string {
         `<g class="spin">${px(u, 16, 4, 2, 1, C.code)}${px(u, 17, 5, 1, 2, C.code)}${px(u, 19, 6, 1, 1, C.code)}</g>` +
         px(u, 15, 8, 7, 1, C.blueLight)
     case 'thinking':
-      return `<g class="flip">${pixels(u, 16, 2, ['#####', 'coooc', '.coc.', '..o..', '.c.c.', 'coooc', '#####'], { '#': C.blue, o: C.yellow, c: C.blueLight })}</g>` +
+      // Turned over every second by the clock (a redraw would restart a CSS flip before it shows)
+      return `<g${flipped ? ' transform="rotate(180 37 11)"' : ''}>${pixels(u, 16, 2, ['#####', 'coooc', '.coc.', '..o..', '.c.c.', 'coooc', '#####'], { '#': C.blue, o: C.yellow, c: C.blueLight })}</g>` +
         `<g class="sparkA">${px(u, 15, 1, 1, 1, C.yellow)}${px(u, 21, 5, 1, 1, C.yellow)}</g><g class="sparkB">${px(u, 21, 1, 1, 1, C.yellow)}${px(u, 15, 7, 1, 1, C.yellow)}</g>`
     case 'starting':
       return pixels(u, 16, 3, ['#.#', '###', '.#.', '.#.', '.#.', '.#.'], { '#': C.greyDark })
@@ -639,9 +842,13 @@ const spriteCache = new Map<string, string>()
  */
 export function spriteSvg(a: Agent, now: number): string {
   const activity = a.status === 'running' ? shownActivity(a, now).activity : a.activity
-  return memo(spriteCache, `${a.status}|${activity}`, () => {
-    const shown = { ...a, activity }
-    const body = accessory(shown) + creature(shown)
+  const waiting = a.status === 'running' && !!a.waitingFor
+  const scene: ThinkingScene = a.status === 'running' && activity === 'thinking' && !waiting ? thinkingScene(a, now) : 'hourglass'
+  const thinking = a.status === 'running' && activity === 'thinking' && !waiting
+  const n = scene !== 'hourglass' ? sceneFrame(a, now) : thinking ? sceneFrame(a, now) % 2 : 0
+  return memo(spriteCache, `${a.status}|${activity}|${waiting}|${scene}|${n}`, () => {
+    const shown = { ...a, activity, waitingFor: waiting ? a.waitingFor : undefined }
+    const body = scene === 'hourglass' ? accessory(shown, n === 1) + creature(shown) : sceneSvg(shown, scene, n)
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${SPRITE_W}" height="${SPRITE_H}" viewBox="0 -4 44 34">${styleFor(body)}${body}</svg>`
   })
 }
@@ -675,4 +882,13 @@ export function barSvg(share: number, color: string, running: boolean, width: nu
 // ── Terminal ─────────────────────────────────────────────────
 export const textBar = (share: number, width = 16, running = false) =>
   '█'.repeat(running ? Math.min(width - 1, Math.floor(share * width)) : Math.round(share * width)).padEnd(width, '░')
-export const textFace = (s: AgentStatus) => (s === 'done' ? '(^‿^)' : s === 'failed' ? '(x_x)' : s === 'cancelled' ? '(-_-)' : '(•_•)')
+// ── Terminal marker ──────────────────────────────────────────
+// The terminal draws no critter: each row starts with a dot whose color carries the state.
+export const DOT = '●'
+
+/** The terminal row's dot color: working, waiting on you, done, failed or cancelled. */
+export function dotColor(a: Pick<Agent, 'status' | 'waitingFor'>): string {
+  if (a.status === 'running') return a.waitingFor ? C.yellow : C.body
+  return a.status === 'done' ? C.green : a.status === 'failed' ? C.red : C.grey
+}
+
