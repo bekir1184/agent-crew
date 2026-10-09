@@ -60,6 +60,11 @@ test('the demo crew draws on every surface, progresses and finishes', async ($, 
   const term = await $.ui.mount({ plugin: 'agent-crew', surface: 'terminal', component: 'AbovePrompt', props: BAND, viewport: VIEW })
   expect(await term.find({ type: 'Text', text: /AGENT CREW/ })).toBeDefined()
   expect(await term.find({ type: 'Text', text: /└/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /^● $/ })).toBeDefined() // a state dot, no critter
+  // On the terminal the arrows take letters, pressed once the band has the focus (ctrl+x tab)
+  expect(await term.find({ key: 'collapse' })).toMatchObject({ props: { hotkey: 'h' } })
+  expect(await term.find({ key: 'open-demo-0' })).toMatchObject({ props: { hotkey: 'a' } })
+  expect(await term.find({ key: 'open-demo-1' })).toMatchObject({ props: { hotkey: 'b' } })
   await term.press({ key: 'open-demo-1' }) // the arrow is a button on the terminal, for the keyboard
   expect(await term.find({ type: 'Text', text: /re-read from cache/ })).toBeDefined()
   await term.unmount()

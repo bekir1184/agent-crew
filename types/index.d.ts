@@ -9,6 +9,12 @@ export type Step = { id: string; label: string; status: 'pending' | 'in_progress
 /** Token counts as the API reports them, summed over the agent's requests. */
 export type Tokens = { input: number; output: number; cacheWrite: number; cacheRead: number }
 
+/** One recent tool call, for the details panel. */
+export type RecentTool = { label: string; failed?: boolean }
+
+/** A file an agent read or changed, for the details panel. */
+export type TouchedFile = { path: string; changed?: true }
+
 export type Agent = {
   id: string
   /** The subagent type: Explore, Plan, general-purpose, a plugin's agent. */
@@ -31,6 +37,12 @@ export type Agent = {
   endedAt?: number
   tokens: Tokens
   tools: number
+  /** The tool an agent is waiting on the person's approval for; absent when it isn't waiting. */
+  waitingFor?: string
+  /** The last few tool calls, newest last: shown in the details panel. */
+  recent?: RecentTool[]
+  /** The files it read or changed, newest last; a file changed once stays changed. */
+  files?: TouchedFile[]
   /** Closed by the mod (the engine reported it ended, or it vanished), not by its own turn.complete. */
   retired?: true
   /** The highest progress shown so far: a revised estimate never moves the bar backwards. */
@@ -42,10 +54,19 @@ export type Agent = {
   demo?: boolean
   /** Fixed duration for demo agents; real agents learn from history. */
   expectedMs?: number
+  /** The main conversation's turn, on the title's own record: its events count only while it runs. */
+  turnId?: string
 }
 
 declare module 'claude-code' {
   interface PluginState {
-    'agent-crew': { agents: Agent[]; hidden: boolean; expanded: string[] }
+    'agent-crew': {
+      agents: Agent[]
+      /** Claude's own work in the main conversation, drawn on the title row; null between turns. */
+      main: Agent | null
+      hidden: boolean
+      expanded: string[]
+      collapsed: boolean
+    }
   }
 }

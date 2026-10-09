@@ -33,7 +33,11 @@ Requires Claude Code **2.1.293 or newer**, with function-hook plugins ("mods"). 
 ## What it shows
 
 ```
-AGENT CREW  2 agents working, 1 helper working              12.4k tokens · crew ~0:14 left · 46%
+AGENT       Searching  func login(                                          0:12  ·  1.8k tokens  ▸
+
+AGENT  Done  ·  last turn 1:12  ·  14.2k tokens  ·  23 tools                                        ▸
+
+AGENT CREW  Waiting  on 2 agents                     12.4k tokens · crew ~0:14 left · 46%  ▾
 
 [critter]   EXPLORE  Map the auth flow        Searching  func login(         ▰▰▰▰▱▱▱▱  62%  ~0:06 left  3.1k tok  ▸
 [critter]   GENERAL  Write and run the tests  Step 3/5   waiting on 1 helper  ▰▰▰▱▱▱▱▱  50%  ~0:14 left  5.2k tok  ▸
@@ -41,21 +45,28 @@ AGENT CREW  2 agents working, 1 helper working              12.4k tokens · crew
 [critter]   PLAN     Plan the refactor        Done                            ▰▰▰▰▰▰▰▰ 100%  took 0:21   2.4k tok  ▸
 ```
 
+- **Claude's own line.** While Claude works in the main conversation, the framed title shows what it is doing right now, for how long, and the tokens it has used. Working alone, the title says AGENT and is the whole band; its arrow opens the turn's details. When the turn ends, the band shrinks to one thin line without the critter that keeps the turn's final numbers (time, tokens, tools), and its arrow still opens the details. `/crew clear` or `/clear` removes it. When subagents start, the title becomes AGENT CREW, they join below it as rows, and the title says when Claude is waiting on them. The arrow at the end of the title folds the rows away; the next crew starts open again. Turn this off in the settings to see the band only for subagents.
 - **One row per subagent.** Columns are aligned to the band's real width, and long text is cut to fit instead of pushing the row around.
-- **The critter shows the activity.** It holds the tool for what the agent is doing: a magnifier, a page, a code window, a laptop, a globe or an hourglass. When the agent finishes it raises a checkered flag. A failed agent gets dizzy eyes, a cancelled one falls asleep.
+- **The critter shows the activity.** It holds the tool for what the agent is doing: a magnifier, a page, a code window, a laptop, a globe or an hourglass. While it thinks, it keeps taking turns between an hourglass, a thought cloud that fills with a question mark and a lightbulb that lights up. Each agent starts at a different scene, so a crew isn't in step. When the agent finishes it raises a checkered flag. A failed agent gets dizzy eyes, a cancelled one falls asleep.
 - **Helpers.** A subagent started by another subagent appears indented under its parent, and the parent's row says it is waiting on it.
 - **Real steps when available.** If an agent keeps a to-do list (`TodoWrite`, `TaskCreate`, `TaskUpdate`), the bar follows its actual steps ("Step 3/5").
 - **Details on demand.** Press the arrow at the end of a row to open a panel under it with:
   - the full task and target
   - the step list
-  - a token breakdown
+  - the last five tool calls, with failed ones marked
+  - the files it changed and the files it read, newest first, shown from the project folder
+  - a token breakdown, and the estimated cost when costs are on
   - the model, and the tool and request counts
 
   The arrow turns from ▸ to ▾ while the panel is open; press it again to close it. Only one panel is open at a time, and the open row and its panel get a dashed yellow frame. The arrow is a regular button, so it works with the keyboard too.
+- **Needs your approval.** When an agent stops at a permission prompt, its critter looks up with a question bubble, the row says "Needs approval" and which tool, and the title counts the agents waiting on you.
+- **Health signals.** A tool call running longer than 30 seconds shows its time next to the target, and an agent with no activity for 2 minutes is marked "Quiet". Both are only hints: the agent is never closed for them.
+- **Status line.** While the crew is hidden with `/crew`, the status line keeps a one-line summary, such as `Agent Crew: 2 working · 1 needs approval · ~0:14 left`.
+- **Secrets stay out.** Tokens, keys and passwords in commands, URLs and task text (`sk-…`, `ghp_…`, `AKIA…`, JWTs, `password=…`, `Bearer …`) are shown as `•••`.
 - **Fits your theme.** Text is drawn with Claude Code's own elements and theme colors; the agent types keep their own accent colors so they stay recognizable. The critters, bars and arrows are pixel-art SVG.
 - **Calm by design.** The short thinking pauses between tool calls don't make the critter flicker. "Thinking" shows only once it lasts longer than 1.5 seconds.
 
-Works in the desktop app's Code tab and in the terminal. The terminal draws the same columns with text.
+Works in the desktop app's Code tab and in the terminal. The terminal draws the same columns, each row led by a dot whose color shows the state; the critters are drawn on the desktop.
 
 ## Commands
 
@@ -65,7 +76,18 @@ Works in the desktop app's Code tab and in the terminal. The terminal draws the 
 | `/crew demo` | Put a demo crew on stage (4 agents and 2 helpers, every outcome) to see the design |
 | `/crew clear` | Clear the stage |
 
-When everyone has finished, the crew leaves the stage with your next message. Hiding with `/crew` hides only the current crew; the next one shows again. The stage holds up to 12 agents; past that, finished ones make room first.
+**In the terminal**, the arrows are pressed with the keyboard. Press `ctrl+x tab` to move the focus to the crew, then the letter shown on an arrow: `h` for the title's arrow, `a`, `b`, `c`, … for the rows in order. `Esc` returns to the prompt. Letters are used rather than digits because a digit typed into an empty prompt would also press a crew button.
+
+When everyone has finished, the crew leaves the stage with your next message or with `/clear`. Hiding with `/crew` hides only the current crew; the next one shows again. The stage holds up to 12 agents; past that, finished ones make room first.
+
+## Settings
+
+Set these with `/plugin configure agent-crew@agent-crew`, or when you install it.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| Show Claude's own work | on | The framed AGENT line with Claude's activity, time and tokens while it works |
+| Show estimated cost | off | Adds a ≈ dollar estimate to each row, the title and the details panel |
 
 ## How the numbers work
 
@@ -79,6 +101,8 @@ When everyone has finished, the crew leaves the stage with your next message. Hi
 - When an agent runs longer than usual, the estimate is redone instead of counting overtime. It looks only at past runs that lasted at least this long and takes their median. If none did, it adds a quarter of the time so far, at least 10 seconds. The details panel marks this "re-estimated".
 - With no history at all it assumes one minute and labels it "first estimate".
 - The bar follows elapsed ÷ (elapsed + time left), so it agrees with the time column. It never moves backwards: when the estimate is revised upwards, the bar holds still until real progress catches up. It never shows full before an agent is done.
+
+**Cost.** When costs are on, each agent's tokens are priced at Anthropic's list prices for its model: input, output, cache writes (at 1.25× input) and cache re-reads (at their own, much lower price). It is marked ≈ because it is an estimate: plans, discounts, batch pricing and longer cache lifetimes change what you actually pay, and a model the mod doesn't know shows no cost.
 
 Run history stays on your machine, in the plugin's own storage.
 
@@ -102,7 +126,8 @@ agent-crew/
 ├── hooks/
 │   ├── hooks.json         points to register.tsx
 │   ├── register.tsx       the hooks: session.start, agent.spawn, tool.call, turn.step,
-│   │                      turn.complete, prompt.submit, ui.render, /crew
+│   │                      turn.complete, prompt.submit, permission and /clear events,
+│   │                      ui.render, /crew
 │   └── draw.ts            pure logic and pixel art, no engine dependency
 ├── types/index.d.ts       the $.state contract
 ├── tests/                 run by `claude plugin test`
