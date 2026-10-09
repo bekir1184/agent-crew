@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-09
+
+### Changed
+
+- A row's details now open from an arrow button at its end (▸ / ▾) instead of
+  a click anywhere on the row. The desktop delivers raw pointer events to
+  plugin layers unreliably (presses dropped, releases doubled), so clicks were
+  missed or undone; a button works every time, and with the keyboard too.
+- The title row is framed in Claude's color. The Clear and Hide buttons are
+  gone: `/crew` hides and `/crew clear` clears.
+
+### Fixed
+
+- The "doing" column no longer wraps onto a second line on the desktop.
+- Rows use more of the available width, so task names are cut less.
+
 ## [0.1.0] - 2026-10-09
 
 ### Added
@@ -35,5 +51,6 @@ All notable changes to this project are documented here. The format follows
   never retired. Resumed subagents run again. Every hook falls back to Claude
   Code's own behavior on error.
 
-[Unreleased]: https://github.com/bekir1184/agent-crew/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/bekir1184/agent-crew/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/bekir1184/agent-crew/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/bekir1184/agent-crew/releases/tag/v0.1.0

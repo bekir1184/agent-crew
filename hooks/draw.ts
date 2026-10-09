@@ -296,14 +296,15 @@ export function capAgents(list: Agent[], max = 12): Agent[] {
 // Fixed columns take their room first; the task and the "doing" text share what is left.
 export type Layout = { type: number; task: number; doing: number; pct: number; eta: number; tokens: number; barCells: number; showTokens: boolean }
 
-/** Cells a row spends besides its columns: the sprite, the gaps between columns, the arrow and its margin. */
-export const FIXED_EXTRAS = 6 + 9 + 3 + 1
+/** Cells a row spends besides its columns: the sprite, the gaps between columns, the arrow button and its margin. */
+export const FIXED_EXTRAS = 6 + 9 + 4 + 1
 
 /**
  * The desktop reports its width in code-font cells but lays boxes out a little wider, so a
- * desktop row plans with 90% of the reported width. The terminal's cells are exact.
+ * desktop row plans with 94% of the reported width (bodyColumns already leaves out the
+ * engine's marks and a docked pane). The terminal's cells are exact.
  */
-const DESKTOP_BUDGET = 0.9
+const DESKTOP_BUDGET = 0.94
 
 export function layout(columns: number, desktop = true): Layout {
   const budget = Math.floor(columns * (desktop ? DESKTOP_BUDGET : 1))
@@ -649,19 +650,6 @@ export function spriteSvg(a: Agent, now: number): string {
 export function headerSvg(done: boolean): string {
   const a = { status: done ? 'done' : 'running', activity: 'thinking' } as Agent
   return spriteSvg(a, 0)
-}
-
-/** The row's disclosure arrow, in pixels: grey and pointing right when closed, yellow and down when open. */
-export const ARROW_PX = 18
-export function arrowSvg(open: boolean): string {
-  const rows = open
-    ? ['#########', '.#######.', '..#####..', '...###...', '....#....']
-    : ['#....', '##...', '###..', '####.', '#####', '####.', '###..', '##...', '#....']
-  // Centered in a 9×9 grid of 2 px cells
-  const ox = Math.floor((9 - rows[0].length) / 2)
-  const oy = Math.floor((9 - rows.length) / 2)
-  const body = pixels(2, ox, oy, rows, { '#': open ? C.yellow : C.grey })
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${ARROW_PX}" height="${ARROW_PX}" viewBox="0 0 18 18">${styleFor(body)}${body}</svg>`
 }
 
 const barCache = new Map<string, string>()

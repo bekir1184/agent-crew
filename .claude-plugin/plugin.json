@@ -1,11 +1,21 @@
 {
   "name": "agent-crew",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shows your subagents above the prompt as pixel-art Claude crew members: what each one is doing, how far along it is and how many tokens it used.",
-  "author": { "name": "Bekir Ersever", "url": "https://github.com/bekir1184" },
+  "author": {
+    "name": "Bekir Ersever",
+    "url": "https://github.com/bekir1184"
+  },
   "homepage": "https://github.com/bekir1184/agent-crew",
   "repository": "https://github.com/bekir1184/agent-crew",
   "license": "MIT",
-  "keywords": ["subagents", "agents", "progress", "pixel-art", "ui", "mod"],
+  "keywords": [
+    "subagents",
+    "agents",
+    "progress",
+    "pixel-art",
+    "ui",
+    "mod"
+  ],
   "types": "./types/index.d.ts"
 }

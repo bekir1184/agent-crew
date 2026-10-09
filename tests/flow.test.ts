@@ -171,14 +171,3 @@ test('task tools drive real step progress, and a failed update changes nothing',
   expect(await ui.find({ type: 'Text', text: /^Step 2\/2$/ })).toBeDefined()
   await ui.unmount()
 })
-
-test("a row's layer opens its own row, and only its own", async ($, on) => {
-  const w = await world($, on, () => [{ id: 'a1', status: 'running' }])
-  await w.clock.advance(1_000)
-  const ui = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
-  await ui.post({ id: 'someone-else', open: true }, { in: 'hit-a1' })
-  expect(await ui.find({ type: 'Text', text: /re-read from cache/ })).toBeUndefined()
-  await ui.post({ id: 'a1', open: true }, { in: 'hit-a1' })
-  expect(await ui.find({ type: 'Text', text: /re-read from cache/ })).toBeDefined()
-  await ui.unmount()
-})

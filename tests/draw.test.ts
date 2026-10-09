@@ -135,8 +135,8 @@ test('a parent waiting on a helper says so', async () => {
 test('a row always fits its width; tokens stay until the surface is very narrow', async () => {
   const width = (L: ReturnType<typeof layout>) => FIXED_EXTRAS + L.type + L.task + L.doing + L.pct + L.eta + L.barCells + (L.showTokens ? L.tokens : 0)
   for (let columns = 90; columns <= 220; columns += 5) {
-    // The desktop lays cells out wider than it reports, so a desktop row keeps 10% free
-    expect(width(layout(columns, true))).toBeLessThanOrEqual(Math.floor(columns * 0.9))
+    // The desktop lays cells out wider than it reports, so a desktop row keeps 6% free
+    expect(width(layout(columns, true))).toBeLessThanOrEqual(Math.floor(columns * 0.94))
     expect(width(layout(columns, false))).toBeLessThanOrEqual(columns)
     if (columns >= 95) expect(layout(columns, true).showTokens).toBe(true)
   }
