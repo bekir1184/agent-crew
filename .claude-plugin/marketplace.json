@@ -1,0 +1,15 @@
+{
+  "name": "agent-crew",
+  "description": "Agent Crew: a Claude Code mod that shows your subagents as a pixel-art crew above the prompt.",
+  "owner": {
+    "name": "Bekir Ersever",
+    "url": "https://github.com/bekir1184"
+  },
+  "plugins": [
+    {
+      "name": "agent-crew",
+      "source": "./",
+      "description": "Your subagents as a pixel-art crew above the prompt: activity, progress, time left and tokens."
+    }
+  ]
+}
