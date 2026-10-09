@@ -67,11 +67,27 @@ export function formatDuration(ms: number): string {
 }
 
 /**
- * Tokens that are new work: input, output and what was written to the cache.
- * Cache reads are left out: every request re-reads the whole conversation from the
- * cache at about a tenth of the price, so summing them makes small agents look huge.
+ * The tokens a row shows: what the agent's own work took, its input and its output. The cache
+ * lives in the details panel: every request re-reads the whole conversation from it, and after a
+ * pause the whole conversation is written to it again, so either would swamp the row.
  */
-export const freshTokens = (t: Tokens) => t.input + t.output + t.cacheWrite
+export const workTokens = (t: Tokens) => t.input + t.output
+
+/** The token figure on a row, the title and the thin line: "3.1k tok". */
+export function tokenText(t: Tokens, unit = 'tok'): string {
+  return `${formatTokens(workTokens(t))} ${unit}`
+}
+
+/** A big cache write (a long conversation picked up after its cache expired) gets a word of explanation. */
+export const CACHE_NOTE_MIN = 10_000
+export function cacheIsNotable(t: Tokens): boolean {
+  return t.cacheWrite >= CACHE_NOTE_MIN && t.cacheWrite >= t.input + t.output
+}
+
+/** Several agents' tokens added up. */
+export function sumTokens(list: readonly Tokens[]): Tokens {
+  return list.reduce((s, t) => ({ input: s.input + t.input, output: s.output + t.output, cacheWrite: s.cacheWrite + t.cacheWrite, cacheRead: s.cacheRead + t.cacheRead }), emptyTokens())
+}
 
 export const emptyTokens = (): Tokens => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0 })
 
@@ -241,6 +257,22 @@ export type Sample = { ms: number; requests: number }
 export type History = Record<string, Sample[]>
 const DEFAULT_MS = 60_000
 
+const FAMILIES = ['haiku', 'sonnet', 'opus', 'fable', 'mythos']
+
+/**
+ * A model id as people say it: "claude-opus-5-5" is "Opus 5.5", "claude-sonnet-4-5-20250929"
+ * is "Sonnet 4.5", the older "claude-3-5-haiku" is "Haiku 3.5". Empty for an unknown id.
+ */
+export function modelLabel(model: string): string {
+  const id = (model || '').toLowerCase()
+  const family = FAMILIES.find(f => id.includes(f))
+  if (!family) return ''
+  // Version numbers: single digits around the family name, leaving dates (8 digits) out
+  const nums = id.split(/[^0-9]+/).filter(n => n && n.length <= 2)
+  const name = family[0].toUpperCase() + family.slice(1)
+  return nums.length ? `${name} ${nums.slice(0, 2).join('.')}` : name
+}
+
 export function modelShort(model: string): string {
   for (const m of ['haiku', 'sonnet', 'opus', 'fable']) if (model.includes(m)) return m
   return model || '?'
@@ -399,7 +431,7 @@ export function capAgents(list: Agent[], max = 12): Agent[] {
 // ── Row layout ───────────────────────────────────────────────
 // Column widths come from the surface's real width, so a row never runs past the right edge.
 // Fixed columns take their room first; the task and the "doing" text share what is left.
-export type Layout = { type: number; task: number; doing: number; pct: number; eta: number; tokens: number; barCells: number; showTokens: boolean }
+export type Layout = { type: number; task: number; doing: number; pct: number; eta: number; tokens: number; barCells: number; showTokens: boolean; model: number }
 
 /** Cells a row spends besides its columns: the sprite, the gaps between columns, the arrow button and its margin. */
 export const FIXED_EXTRAS = 6 + 9 + 4 + 1
@@ -416,7 +448,9 @@ export function layout(columns: number, desktop = true, showCost = false): Layou
   // arrow carries a hotkey ("a: ▸"), three cells more
   const budget = Math.floor(columns * (desktop ? DESKTOP_BUDGET : 1)) + (desktop ? 0 : 6 - 2 - 3)
   // With costs on, the token column also holds "≈$0.04"
-  const base = { type: 8, pct: 5, eta: 11, tokens: showCost ? 17 : 10 }
+  // The type column also holds the model: under the type on the desktop ("Sonnet 5.5" needs ten
+  // cells), beside it on the terminal when there is room
+  const base = { type: desktop ? 9 : 8, pct: 5, eta: 11, tokens: showCost ? 17 : 10 }
   let barCells = 14
   let showTokens = true
   const flexible = () => budget - FIXED_EXTRAS - base.type - base.pct - base.eta - barCells - (showTokens ? base.tokens : 0)
@@ -424,10 +458,11 @@ export function layout(columns: number, desktop = true, showCost = false): Layou
   // thing to go (it moves into the details panel only on very narrow surfaces)
   if (flexible() < 30) barCells = 8
   if (flexible() < 18) showTokens = false
-  const room = Math.max(18, flexible())
+  const model = !desktop && flexible() >= 46 ? 7 : 0
+  const room = Math.max(18, flexible() - model)
   const task = Math.min(36, Math.max(8, Math.round(room * 0.5)))
   const doing = Math.min(46, Math.max(10, room - task))
-  return { ...base, task, doing, barCells, showTokens }
+  return { ...base, task, doing, barCells, showTokens, model }
 }
 
 // ── Step tracking: the agent's own to-do list ─────────────────
@@ -857,6 +892,27 @@ export function spriteSvg(a: Agent, now: number): string {
 export function headerSvg(done: boolean): string {
   const a = { status: done ? 'done' : 'running', activity: 'thinking' } as Agent
   return spriteSvg(a, 0)
+}
+
+// ── Type label (desktop) ─────────────────────────────────────
+// The type and the model, drawn small as an SVG: the desktop's Text has one size, and at that
+// size two lines of label crowd the row.
+export const LABEL_W = 70
+export const LABEL_H = 30
+const labelCache = new Map<string, string>()
+const escXml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+export function labelSvg(type: string, model: string): string {
+  const name = typeLabel(type)
+  const sub = modelLabel(model)
+  return memo(labelCache, `${name}|${sub}`, () => {
+    const font = 'font-family="ui-sans-serif,system-ui,-apple-system,sans-serif"'
+    const top = sub ? 13 : 19
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${LABEL_W}" height="${LABEL_H}" viewBox="0 0 ${LABEL_W} ${LABEL_H}" ${font}>` +
+      `<text x="0" y="${top}" font-size="10.5" font-weight="700" letter-spacing=".4" fill="${typeColor(type)}">${escXml(name)}</text>` +
+      (sub ? `<text x="0" y="25" font-size="9.5" fill="${C.grey}">${escXml(sub)}</text>` : '') +
+      `</svg>`
+  })
 }
 
 const barCache = new Map<string, string>()

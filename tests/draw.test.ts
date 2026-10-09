@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { Agent } from '../types'
 import {
-  FIXED_EXTRAS, addUsage, barSvg, capAgents, crewSummary, doingText, emptyTokens, estimateText, expectation, freshTokens,
+  FIXED_EXTRAS, addUsage, barSvg, capAgents, crewSummary, doingText, emptyTokens, estimateText, expectation, workTokens,
   layout, learn, progress, remaining, sanitizeHistory, shownActivity, shownProgress, spriteSvg, stepSummary, stepsFromTodos,
   tree, withActivity, withStepCreated, withStepUpdated,
 } from '../hooks/draw'
@@ -114,9 +114,10 @@ test('past the cap finished agents go first and running ones stay', async () => 
   expect(kept.some(a => a.id === 'a1')).toBe(false)
 })
 
-test('fresh tokens leave cache re-reads out', async () => {
+test("a row's tokens are the work itself; the cache is kept apart", async () => {
   const t = addUsage(emptyTokens(), { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 200, cache_read_input_tokens: 30_000 })
-  expect(freshTokens(t)).toBe(350)
+  expect(workTokens(t)).toBe(150)
+  expect(t.cacheWrite).toBe(200)
   expect(t.cacheRead).toBe(30_000)
 })
 
@@ -133,7 +134,7 @@ test('a parent waiting on a helper says so', async () => {
 })
 
 test('a row always fits its width; tokens stay until the surface is very narrow', async () => {
-  const width = (L: ReturnType<typeof layout>, extra = 0) => FIXED_EXTRAS + extra + L.type + L.task + L.doing + L.pct + L.eta + L.barCells + (L.showTokens ? L.tokens : 0)
+  const width = (L: ReturnType<typeof layout>, extra = 0) => FIXED_EXTRAS + extra + L.model + L.type + L.task + L.doing + L.pct + L.eta + L.barCells + (L.showTokens ? L.tokens : 0)
   for (let columns = 90; columns <= 220; columns += 5) {
     // The desktop lays cells out wider than it reports, so a desktop row keeps 6% free
     expect(width(layout(columns, true))).toBeLessThanOrEqual(Math.floor(columns * 0.94))
@@ -206,4 +207,30 @@ test('a thinking crew member moves through scenes, each agent at its own place',
   // Waiting on the person always shows the question bubble, never a scene
   const asking = { ...a, waitingFor: 'Bash' }
   expect(spriteSvg(asking, 1)).toBe(spriteSvg(asking, 1 + FRAME_MS))
+})
+
+import { cacheIsNotable, tokenText } from '../hooks/draw'
+
+test('the row figure never includes the cache; a big rebuild is flagged for the details', async () => {
+  // A long conversation picked up after its cache expired: one request writes all of it again
+  const rebuilt = { input: 9_000, output: 3_000, cacheWrite: 768_000, cacheRead: 0 }
+  expect(tokenText(rebuilt)).toBe('12.0k tok')
+  expect(tokenText(rebuilt, 'tokens')).toBe('12.0k tokens')
+  expect(cacheIsNotable(rebuilt)).toBe(true)
+  const usual = { input: 2_100, output: 2_600, cacheWrite: 500, cacheRead: 148_000 }
+  expect(tokenText(usual)).toBe('4.7k tok')
+  expect(cacheIsNotable(usual)).toBe(false)
+})
+
+import { modelLabel } from '../hooks/draw'
+
+test('model ids read the way people say them', async () => {
+  expect(modelLabel('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(modelLabel('claude-fable-5-1')).toBe('Fable 5.1')
+  expect(modelLabel('claude-sonnet-4-5-20250929')).toBe('Sonnet 4.5')
+  expect(modelLabel('claude-3-5-haiku-20241022')).toBe('Haiku 3.5')
+  expect(modelLabel('claude-opus-4')).toBe('Opus 4')
+  expect(modelLabel('sonnet')).toBe('Sonnet')
+  expect(modelLabel('some-other-model')).toBe('')
+  expect(modelLabel('')).toBe('')
 })
