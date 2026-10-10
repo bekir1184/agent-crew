@@ -312,6 +312,20 @@ test('the crew starts in the side pane; ⇤ brings the band back and ⇥ moves i
   await again.unmount()
 })
 
+test("a finished agent's ✕ sends it off the stage; a running one has none", async ($, on) => {
+  const w = await world($, on, () => [{ id: 'a1', status: 'running' }])
+  await w.clock.advance(1_000)
+  const ui = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
+  expect(await ui.find({ key: 'close-a1' })).toBeUndefined()
+  await w.step('t1', 0)
+  await w.complete('t1')
+  expect(await ui.find({ key: 'close-a1' })).toMatchObject({ props: { role: 'dismiss' } })
+  await ui.press({ key: 'close-a1' })
+  expect(await ui.find({ key: 'open-a1' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /ENGINE ROW/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('a quiet agent is flagged without being retired', async ($, on) => {
   const w = await world($, on, () => [{ id: 'a1', status: 'running' }])
   await w.clock.advance(130_000)

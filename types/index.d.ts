@@ -70,6 +70,7 @@ declare module 'claude-code' {
       minimized: boolean
       side: boolean
       paneUp: boolean
+      foldFrame: number
     }
   }
 }

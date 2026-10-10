@@ -50,7 +50,7 @@ When an agent stops to ask for permission, it says so: a yellow question bubble,
 
 ## The details
 
-Every row has an arrow. It opens everything the row had no room for: the full task, its to-do list, the files it touched, and its tokens.
+Every row has an arrow. It slides open everything the row had no room for, and a finished agent gets a ✕ to send it off the stage: the full task, its to-do list, the files it touched, and its tokens.
 
 <img src="docs/details.svg" alt="A row opens into a panel: task, current step, checklist, changed files, token breakdown and run summary" width="100%">
 

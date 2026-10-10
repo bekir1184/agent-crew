@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Activity, Agent, AgentStatus, RecentTool, Step, Tokens, TouchedFile } from '../types'
 import {
@@ -26,6 +26,8 @@ const minimized = atom({ plugin: 'agent-crew', key: 'minimized' } as const, fals
 const side = atom({ plugin: 'agent-crew', key: 'side' } as const, false)
 /** Whether the side pane is placed now: until it is, the band keeps showing. */
 const paneUp = atom({ plugin: 'agent-crew', key: 'paneUp' } as const, false)
+/** Bumped on each frame of a sliding details panel: the drawings that read it redraw. */
+const foldFrame = atom({ plugin: 'agent-crew', key: 'foldFrame' } as const, 0)
 /** The side pane's id, and the width it asks for: about 300 px of the desktop's text. */
 const PANE = 'crew'
 const SIDE_COLUMNS = 38
@@ -443,6 +445,7 @@ export const register: Register = (on, options) => {
     const working = m?.status === 'running' ? m : null
     if (list.length === 0 && !m) return next(e)
     const open = await read($, expanded)
+    await read($, foldFrame)
 
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
@@ -530,7 +533,7 @@ export const register: Register = (on, options) => {
     if (!hasCrew) {
       // Claude alone: the arrow opens the details of its turn under the title
       const isOpen = open.includes(MAIN_ID)
-      const details = isOpen ? detailsPanel({ Box, Text }, { a: m!, depth: 0, isOpen, share: 0, est: { main: '', extra: '' }, doing: own ?? doingText(m!, now, 0), color: statusColor(m!) }, now, 2) : null
+      const details = showsDetails(MAIN_ID, isOpen) ? unfold({ Box }, MAIN_ID, detailsPanel({ Box, Text }, { a: m!, depth: 0, isOpen, share: 0, est: { main: '', extra: '' }, doing: own ?? doingText(m!, now, 0), color: statusColor(m!) }, now, 2), now) : null
       if (working) return details ? <Box flexDirection="column">{header}{details}</Box> : header
       return thinLine({ Box, Text, Button }, m!, now, isOpen, () => setOpen($, MAIN_ID, !isOpen), !!Svg, details)
     }
@@ -548,14 +551,14 @@ export const register: Register = (on, options) => {
       }
       const toggle = () => setOpen($, a.id, !isOpen)
       const line = Svg
-        ? desktopRow({ Box, Text, Svg, Button }, row, L, barPx, now, toggle)
+        ? desktopRow({ Box, Text, Svg, Button }, row, L, barPx, now, toggle, () => dismissAgent($, a.id))
         : terminalRow({ Box, Text, Button }, row, L, toggle, ROW_KEYS[index])
       // Every row lives in the same wrapper, open or not, so a toggle never rebuilds the row.
       // Open, the wrapper frames the row and its details in dashed yellow.
       return (
         <Box key={`${a.id}-wrap`} flexDirection="column" borderStyle={isOpen ? 'dashed' : undefined} borderColor={isOpen ? 'warning' : undefined}>
           {line}
-          {isOpen ? detailsPanel({ Box, Text }, row, now, depth * 3 + (Svg ? SPRITE_CELLS : 6) + 1) : null}
+          {showsDetails(a.id, isOpen) ? unfold({ Box }, a.id, detailsPanel({ Box, Text }, row, now, depth * 3 + (Svg ? SPRITE_CELLS : 6) + 1), now) : null}
         </Box>
       )
     })
@@ -573,19 +576,20 @@ export const register: Register = (on, options) => {
     const list = shown(await read($, agents))
     const m = await read($, main)
     const open = await read($, expanded)
+    await read($, foldFrame)
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : undefined
     const now = await $.clock.now()
     const cols = e.props.bodyColumns || SIDE_COLUMNS
     const back = Svg ? (
-      <Button key="unside" label="⇤" onPress={() => setSide($, false)} />
+      <Button key="unside" label="⇤" dimColor hover={{ dimColor: false }} onPress={() => setSide($, false)} />
     ) : (
       <Button key="unside" label="⇤" hotkey={SIDE_KEY} plain onPress={() => setSide($, false)} />
     )
     if (list.length === 0 && !m) {
       return (
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+        <Box key="title" flexDirection="row" justifyContent="space-between" alignItems="center">
           <Text color="subtle">No agents yet.</Text>
           {back}
         </Box>
@@ -594,7 +598,7 @@ export const register: Register = (on, options) => {
     const { working, hasCrew, right, own, said, ownModel } = titleFacts(list, m, now)
     const runningHelpers = (id: string) => list.filter(a => a.parentId === id && a.status === 'running').length
     const title = (
-      <Box flexDirection="column">
+      <Box key="title" flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
           <Text wrap="truncate-end">
             <Text bold color="claude">{hasCrew ? 'AGENT CREW' : 'AGENT'}</Text>
@@ -617,7 +621,7 @@ export const register: Register = (on, options) => {
         doing: doingText(a, now, runningHelpers(a.id)),
         color: statusColor(a),
       }
-      return sideCard({ Box, Text, Svg, Button }, row, cols, now, () => setOpen($, a.id, !isOpen), ROW_KEYS[index])
+      return sideCard({ Box, Text, Svg, Button }, row, cols, now, () => setOpen($, a.id, !isOpen), () => dismissAgent($, a.id), ROW_KEYS[index])
     })
     return (
       <Box flexDirection="column" gap={1}>
@@ -641,7 +645,7 @@ export const register: Register = (on, options) => {
 }
 
 /** One agent in the side pane: the sprite beside four short lines, its details below when open. */
-function sideCard({ Box, Text, Svg, Button }: Els, r: RowData, cols: number, now: number, onToggle: () => void, hotkey: string | undefined) {
+function sideCard({ Box, Text, Svg, Button }: Els, r: RowData, cols: number, now: number, onToggle: () => void, onDismiss: () => void, hotkey: string | undefined) {
   const { a, depth, isOpen, share, est, doing, color } = r
   const running = a.status === 'running'
   // The sprite (or the terminal's dot) and the gap beside it take this many cells
@@ -649,9 +653,15 @@ function sideCard({ Box, Text, Svg, Button }: Els, r: RowData, cols: number, now
   const textCells = Math.max(10, cols - lead - (isOpen ? 2 : 0))
   const barCells = Math.max(6, Math.min(16, textCells - 12))
   const arrow = Svg ? (
-    <Button key={`open-${a.id}`} label={isOpen ? '▾' : '▸'} onPress={onToggle} />
+    <Button key={`open-${a.id}`} label={isOpen ? '▾' : '▸'} dimColor hover={{ dimColor: false }} onPress={onToggle} />
   ) : (
     <Button key={`open-${a.id}`} label={isOpen ? '▾' : '▸'} hotkey={hotkey} plain onPress={onToggle} />
+  )
+  // A finished agent can be sent off the stage
+  const close = running ? null : Svg ? (
+    <Button key={`close-${a.id}`} label="✕" role="dismiss" dimColor hover={{ dimColor: false }} onPress={onDismiss} />
+  ) : (
+    <Button key={`close-${a.id}`} label="✕" plain dimColor onPress={onDismiss} />
   )
   return (
     <Box key={`${a.id}-wrap`} flexDirection="column" borderStyle={isOpen ? 'dashed' : undefined} borderColor={isOpen ? 'warning' : undefined}>
@@ -667,7 +677,10 @@ function sideCard({ Box, Text, Svg, Button }: Els, r: RowData, cols: number, now
               <Text bold color={typeColor(a.type)}>{typeLabel(a.type)}</Text>
               <Text color="subtle">{modelLabel(a.model) ? `  ${modelLabel(a.model)}` : ''}</Text>
             </Text>
-            {arrow}
+            <Box flexDirection="row" gap={1} flexShrink={0}>
+              {arrow}
+              {close}
+            </Box>
           </Box>
           <Text bold={depth === 0} dimColor={depth > 0} wrap="truncate-end">{clip(a.description, textCells * (Svg ? DESKTOP_TEXT_ROOM : 1))}</Text>
           <Text wrap="truncate-end">
@@ -685,7 +698,7 @@ function sideCard({ Box, Text, Svg, Button }: Els, r: RowData, cols: number, now
           </Box>
         </Box>
       </Box>
-      {isOpen ? detailsPanel({ Box, Text }, r, now, 0) : null}
+      {showsDetails(a.id, isOpen) ? unfold({ Box }, a.id, detailsPanel({ Box, Text }, r, now, 0), now) : null}
     </Box>
   )
 }
@@ -707,7 +720,7 @@ type RowData = {
 
 const oneLine = (s: string) => s.replace(/\s+/g, ' ')
 
-function desktopRow({ Box, Text, Svg, Button }: Els, r: RowData, L: Layout, barPx: number, now: number, onToggle: () => void) {
+function desktopRow({ Box, Text, Svg, Button }: Els, r: RowData, L: Layout, barPx: number, now: number, onToggle: () => void, onDismiss: () => void) {
   const { a, depth, isOpen, share, est, doing, color } = r
   const helper = depth > 0
   const indent = depth * 3
@@ -755,7 +768,8 @@ function desktopRow({ Box, Text, Svg, Button }: Els, r: RowData, L: Layout, barP
         </Box>
       ) : null}
       {/* The disclosure arrow ends the row: a button, so it works by click and by keyboard */}
-      <Button key={`open-${a.id}`} label={isOpen ? '▾' : '▸'} onPress={onToggle} />
+      <Button key={`open-${a.id}`} label={isOpen ? '▾' : '▸'} dimColor hover={{ dimColor: false }} onPress={onToggle} />
+      {running ? null : <Button key={`close-${a.id}`} label="✕" role="dismiss" dimColor hover={{ dimColor: false }} onPress={onDismiss} />}
     </Box>
   )
 }
@@ -1060,7 +1074,74 @@ async function setOpen($: EngineInterface, id: string, open: boolean) {
   const ids = await read($, expanded)
   const already = open ? ids.length === 1 && ids[0] === id : !ids.includes(id)
   if (already) return
+  // The details slide open, and whatever closes slides shut
+  const now = await $.clock.now()
+  for (const x of open ? ids.filter(x => x !== id) : [id]) startFold($, x, false, now)
+  if (open) startFold($, id, true, now)
   await update($, expanded, current => (open ? [id] : current.filter(x => x !== id)))
+}
+
+// ── Unfolding ────────────────────────────────────────────────
+// The surfaces lay a plugin out in text rows and run no transitions of their own, so a details
+// panel slides open by its height in rows: a short run of redraws, eased, then the timer stops.
+const UNFOLD_MS = 160
+const FRAME_MS = 20
+/** Panels sliding now, by row id: which way, and since when. */
+const folds = new Map<string, { open: boolean; at: number }>()
+let foldTimer: { cancel: () => void } | null = null
+
+function startFold($: EngineInterface, id: string, open: boolean, now: number) {
+  folds.set(id, { open, at: now })
+  if (foldTimer) return
+  foldTimer = $.clock.every(FRAME_MS, () => {
+    void (async () => {
+      const t = await $.clock.now()
+      for (const [k, f] of folds) if (t - f.at >= UNFOLD_MS) folds.delete(k)
+      await update($, foldFrame, n => n + 1)
+      if (folds.size === 0) {
+        foldTimer?.cancel()
+        foldTimer = null
+      }
+    })().catch(() => undefined)
+  })
+}
+
+/** Whether a row's details are drawn: open, or still sliding shut. */
+const showsDetails = (id: string, isOpen: boolean) => isOpen || folds.get(id)?.open === false
+
+/** The details as far as they have slid: clipped to a growing (or shrinking) number of rows. */
+function unfold({ Box }: Els, id: string, details: RenderChildren, now: number): RenderChildren {
+  const f = folds.get(id)
+  if (!f) return details
+  const p = Math.min(1, Math.max(0, (now - f.at) / UNFOLD_MS))
+  const eased = 1 - (1 - p) ** 3
+  const rows = rowsOf(details)
+  const shownRows = Math.round(rows * (f.open ? eased : 1 - eased))
+  if (shownRows >= rows) return details
+  if (shownRows <= 0 && !f.open) return null
+  return (
+    <Box key={`${id}-fold`} flexDirection="column" height={Math.max(1, shownRows)} overflow="hidden" flexShrink={0}>
+      {details}
+    </Box>
+  )
+}
+
+/** The rows a details panel takes: one per line it holds (a long line that wraps counts once). */
+function rowsOf(el: unknown): number {
+  const node = el as { children?: unknown; props?: { children?: unknown } } | null
+  const kids = node?.children ?? node?.props?.children
+  const flat = (Array.isArray(kids) ? kids : [kids]).flat(4).filter(k => k !== null && k !== undefined && k !== false)
+  return Math.max(1, flat.length)
+}
+
+/** The ✕ on a finished agent: it leaves the stage, and the pane closes once nobody is left. */
+async function dismissAgent($: EngineInterface, id: string) {
+  folds.delete(id)
+  await update($, agents, list => list.filter(a => a.id !== id))
+  await update($, expanded, ids => ids.filter(x => x !== id))
+  known.delete(id)
+  const left = shown(await read($, agents))
+  if (left.length === 0) await closePane($).catch(() => undefined)
 }
 
 /**
