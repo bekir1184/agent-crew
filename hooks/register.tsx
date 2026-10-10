@@ -146,8 +146,9 @@ export const register: Register = (on, options) => {
     history = sanitizeHistory(await $.store.get('history').catch(() => null))
     const wasMinimized = (await $.store.get('minimized').catch(() => null)) === true
     if (wasMinimized !== (await read($, minimized))) await update($, minimized, () => wasMinimized)
-    // The side pane comes back by itself, where the window is wide enough for the engine to place it
-    if ((await $.store.get('side').catch(() => null)) === true) await setSide($, true).catch(() => undefined)
+    // The crew starts in the side pane unless the person moved it back above the prompt (⇤);
+    // where the engine doesn't place the pane (a narrow window), the band shows instead
+    if ((await $.store.get('side').catch(() => null)) !== false) await setSide($, true).catch(() => undefined)
     const now = await $.clock.now()
     const listed = await listAgents($)
     // A demo's timer died with the previous module; an agent that ended unreported is closed

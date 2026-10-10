@@ -30,7 +30,7 @@ While Claude works, the framed line shows what it's doing this very second. When
 
 ## The crew
 
-When Claude hands work to subagents, they line up below, one row each. Each row names the model it runs on, so you can tell Opus from Haiku at a glance. Helpers started by a subagent tuck in under their parent. Too busy? The arrow on the title folds them away, and the – button shrinks the whole band to one plain line (it stays that way in later sessions until you press ▸). Cancelled agents leave the stage right away. The ⇥ button moves the whole crew into a narrow pane beside the conversation, one stacked card per agent; ⇤ (or closing the pane) brings it back.
+When Claude hands work to subagents, they line up below, one row each. Each row names the model it runs on, so you can tell Opus from Haiku at a glance. Helpers started by a subagent tuck in under their parent. Too busy? The arrow on the title folds them away, and the – button shrinks the whole band to one plain line (it stays that way in later sessions until you press ▸). Cancelled agents leave the stage right away. The crew lives in a narrow pane beside the conversation, one stacked card per agent; ⇤ (or closing the pane) moves it above the prompt, and ⇥ moves it back. In a window too narrow for the pane, it shows above the prompt.
 
 Each critter holds the tool it's using:
 

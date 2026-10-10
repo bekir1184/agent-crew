@@ -258,7 +258,7 @@ test('a cancelled agent leaves the band; the others stay', async ($, on) => {
   await ui.unmount()
 })
 
-test('the side button moves the crew into a narrow pane, and closing the pane brings the band back', async ($, on) => {
+test('the crew starts in the side pane; ⇤ brings the band back and ⇥ moves it to the side again', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   const saved: Record<string, unknown> = {}
   on('store.get', ($, e) => ({ value: saved[e.key] }))
@@ -282,10 +282,9 @@ test('the side button moves the crew into a narrow pane, and closing the pane br
   await $.agent.spawn({ prompt: 'p', description: 'Side job', subagentType: 'Explore' })
   await clock.advance(1_000)
 
-  const band = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
-  await band.press({ key: 'side' })
+  // The side pane is the default: it opens with the session, and the band stays empty
   expect(opens.at(-1)).toMatchObject({ id: 'crew', columns: 38 })
-  expect(saved.side).toBe(true)
+  const band = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
   expect(await band.find({ type: 'Text', text: /ENGINE ROW/ })).toBeDefined()
   await band.unmount()
 
@@ -303,6 +302,11 @@ test('the side button moves the crew into a narrow pane, and closing the pane br
   await pane.unmount()
   const again = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
   expect(await again.find({ key: 'open-a1' })).toBeDefined()
+  // and the band's ⇥ moves it to the side again
+  const opened = opens.length
+  await again.press({ key: 'side' })
+  expect(opens.length).toBe(opened + 1)
+  expect(saved.side).toBe(true)
   await again.unmount()
 })
 
