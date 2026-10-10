@@ -30,7 +30,7 @@ While Claude works, the framed line shows what it's doing this very second. When
 
 ## The crew
 
-When Claude hands work to subagents, they line up below, one row each. Each row names the model it runs on, so you can tell Opus from Haiku at a glance. Helpers started by a subagent tuck in under their parent. Too busy? The arrow on the title folds them away.
+When Claude hands work to subagents, they line up below, one row each. Each row names the model it runs on, so you can tell Opus from Haiku at a glance. Helpers started by a subagent tuck in under their parent. Too busy? The arrow on the title folds them away, and the – button shrinks the whole band to one plain line (it stays that way in later sessions until you press ▸). Cancelled agents leave the stage right away. The crew lives in a narrow pane beside the conversation, one stacked card per agent: it opens when an agent starts and closes when the finished crew leaves the stage; ⇤ (or closing the pane) moves it above the prompt, and ⇥ moves it back. In a window too narrow for the pane, it shows above the prompt.
 
 Each critter holds the tool it's using:
 
@@ -50,7 +50,7 @@ When an agent stops to ask for permission, it says so: a yellow question bubble,
 
 ## The details
 
-Every row has an arrow. It opens everything the row had no room for: the full task, its to-do list, the files it touched, and its tokens.
+Every row has an arrow. It slides open everything the row had no room for, and a finished agent gets a ✕ to send it off the stage: the full task, its to-do list, the files it touched, and its tokens.
 
 <img src="docs/details.svg" alt="A row opens into a panel: task, current step, checklist, changed files, token breakdown and run summary" width="100%">
 
@@ -78,7 +78,7 @@ Turn on **Show estimated cost** in the settings and each row also gets a ≈ dol
 
 **Settings** live in `/plugin configure agent-crew@agent-crew`: show Claude's own line (on), show estimated cost (off).
 
-**In the terminal** there's no pixel art, just a colored dot per row. Press `ctrl+x tab` to reach the crew, then the letter on an arrow: `h` for the title, `a`, `b`, `c` for the rows.
+**In the terminal** there's no pixel art, just a colored dot per row. Press `ctrl+x tab` to reach the crew, then the letter on an arrow: `h` for the title, `z` to minimise, `y` to move to the side pane, `a`, `b`, `c` for the rows.
 
 ## Development
 

@@ -58,10 +58,14 @@ test('the demo crew draws on every surface, progresses and finishes', async ($, 
   // Opening another row closes the first: one panel at a time
   await desk.press({ key: 'open-demo-1' })
   expect(await desk.find({ type: 'Text', text: /^Map the auth flow$/ })).toBeDefined() // the full task, in the panel
+  // The other panel slides shut over a moment, then is gone
+  expect(await desk.find({ type: 'Text', text: /\[x\]|\[>\]/ })).toBeDefined()
+  await clock.advance(200)
   expect(await desk.find({ type: 'Text', text: /\[x\]|\[>\]/ })).toBeUndefined()
 
   // Pressing it again closes it
   await desk.press({ key: 'open-demo-1' })
+  await clock.advance(200)
   expect(await desk.find({ type: 'Text', text: / re-read$/ })).toBeUndefined()
   expect(await desk.find({ key: 'open-demo-1' })).toMatchObject({ props: { label: '▸' } })
   await desk.unmount()

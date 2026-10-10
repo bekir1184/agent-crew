@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Activity, Agent, AgentStatus, RecentTool, Step, Tokens, TouchedFile } from '../types'
 import {
@@ -20,6 +20,17 @@ const hidden = atom({ plugin: 'agent-crew', key: 'hidden' } as const, false)
 const expanded = atom({ plugin: 'agent-crew', key: 'expanded' } as const, [])
 /** The title row's arrow: hides the agent rows below it, leaving the title as the whole view. */
 const collapsed = atom({ plugin: 'agent-crew', key: 'collapsed' } as const, false)
+/** The title's minimise button: the whole band shrinks to one plain line. Kept across sessions in $.store. */
+const minimized = atom({ plugin: 'agent-crew', key: 'minimized' } as const, false)
+/** The crew lives in a narrow pane beside the transcript instead of above the prompt. Kept in $.store. */
+const side = atom({ plugin: 'agent-crew', key: 'side' } as const, false)
+/** Whether the side pane is placed now: until it is, the band keeps showing. */
+const paneUp = atom({ plugin: 'agent-crew', key: 'paneUp' } as const, false)
+/** Bumped on each frame of a sliding details panel: the drawings that read it redraw. */
+const foldFrame = atom({ plugin: 'agent-crew', key: 'foldFrame' } as const, 0)
+/** The side pane's id, and the width it asks for: about 300 px of the desktop's text. */
+const PANE = 'crew'
+const SIDE_COLUMNS = 38
 
 /** Settings from the /config menu (userConfig); a change there reloads the module. */
 let showCost = false
@@ -108,6 +119,10 @@ const DESKTOP_TEXT_ROOM = 2
  * band button, so a message starting with "1." would open a row.
  */
 const TITLE_KEY = 'h'
+/** The terminal's key for the minimise button. */
+const MIN_KEY = 'z'
+/** The terminal's key for moving the crew to the side pane and back. */
+const SIDE_KEY = 'y'
 const ROW_KEYS = [...'abcdefgijklm']
 
 /** A desktop row is exactly this many text rows tall, with the 34 px sprite centered in it. */
@@ -131,6 +146,14 @@ export const register: Register = (on, options) => {
     })
     cwd = e.cwd ?? ''
     history = sanitizeHistory(await $.store.get('history').catch(() => null))
+    const wasMinimized = (await $.store.get('minimized').catch(() => null)) === true
+    if (wasMinimized !== (await read($, minimized))) await update($, minimized, () => wasMinimized)
+    // The crew lives in the side pane unless the person moved it back above the prompt (⇤). The pane
+    // opens when an agent starts; where the engine doesn't place it (a narrow window), the band shows
+    const inSide = (await $.store.get('side').catch(() => null)) !== false
+    if (inSide !== (await read($, side))) await update($, side, () => inSide)
+    // After a reload mid-crew the pane comes back (an unload closed it)
+    if ((await read($, agents)).some(a => a.status === 'running')) await openPane($).catch(() => undefined)
     const now = await $.clock.now()
     const listed = await listAgents($)
     // A demo's timer died with the previous module; an agent that ended unreported is closed
@@ -220,6 +243,7 @@ export const register: Register = (on, options) => {
     for (const a of kept) known.add(a.id)
     for (const id of closedTurn.keys()) if (!known.has(id)) closedTurn.delete(id)
     startTicker($)
+    await openPane($).catch(() => undefined)
     return result
   }).catch(($, e, next) => next(e))
 
@@ -378,6 +402,7 @@ export const register: Register = (on, options) => {
       pending.clear()
       closedTurn.clear()
       setStatus($, undefined)
+      await closePane($).catch(() => undefined)
     }
     const open = await read($, expanded)
     if (open.length) await update($, expanded, () => [])
@@ -413,11 +438,14 @@ export const register: Register = (on, options) => {
     // Cheap checks first: while hidden, the drawing doesn't subscribe to the agent list
     const isHidden = await read($, hidden)
     if (isHidden || e.props.hasSurvey) return next(e)
-    const list = await read($, agents)
+    // Moved to the side pane: the band stays empty while the pane is up
+    if ((await read($, side)) && (await read($, paneUp))) return next(e)
+    const list = shown(await read($, agents))
     const m = await read($, main)
     const working = m?.status === 'running' ? m : null
     if (list.length === 0 && !m) return next(e)
     const open = await read($, expanded)
+    await read($, foldFrame)
 
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
@@ -428,36 +456,32 @@ export const register: Register = (on, options) => {
     const L = layout(e.props.bodyColumns || e.viewport?.columns || 120, !!Svg, showCost)
     const barPx = L.barCells * 8
 
-    const summary = crewSummary(list, now, history)
-    const anyRunning = list.some(a => a.status === 'running')
     const runningHelpers = (id: string) => list.filter(a => a.parentId === id && a.status === 'running').length
-    const crewCost = showCost ? sumCost(list) : null
-    const hasCrew = list.length > 0
-    // Alone, the title is Claude's own line: how long it has worked and what it spent
-    const mainCost = m && showCost ? costOf(m.model, m.tokens)?.total ?? null : null
-    const right = hasCrew
-      ? [
-          tokenText(sumTokens([...list.map(a => a.tokens), ...(working ? [working.tokens] : [])]), 'tokens'),
-          crewCost !== null ? formatCost(crewCost + (mainCost ?? 0)) : '',
-          anyRunning ? `crew ~${formatDuration(summary.leftMs)} left` : '',
-          `${Math.round(summary.share * 100)}%`,
-        ].filter(Boolean).join('  ·  ')
-      : [
-          formatDuration((m!.endedAt ?? now) - m!.startedAt),
-          tokenText(m!.tokens, 'tokens'),
-          mainCost !== null ? formatCost(mainCost) : '',
-        ].filter(Boolean).join('  ·  ')
+    const { anyRunning, hasCrew, right, own, said, ownModel } = titleFacts(list, m, now)
     const isCollapsed = await read($, collapsed)
-    // What the title says: an approval a subagent waits on first, then Claude's own work, then the crew's state
-    const crewAsks = list.some(a => a.status === 'running' && a.waitingFor)
-    // Claude waiting on the subagents it started (the Agent tool shows no activity of its own)
-    const waitsOn = list.filter(a => !a.parentId && a.status === 'running').length
-    const idle = working && (working.activity === 'thinking' || working.activity === 'starting') && !working.waitingFor
-    const own = !working || crewAsks ? null : idle && waitsOn ? { main: 'Waiting', extra: `on ${waitsOn} agent${waitsOn > 1 ? 's' : ''}`, alert: false } : doingText(working, now, 0)
-    // Claude's own model sits beside the title while it works
-    const ownModel = working ? modelLabel(working.model) : ''
+    const isMinimized = await read($, minimized)
     const room = Math.max(12, Math.floor(((e.props.bodyColumns || e.viewport?.columns || 120) - right.length - 26 - ownModel.length) * (Svg ? 0.75 * DESKTOP_TEXT_ROOM : 1)))
-    const said = own ? `${own.main}${own.extra ? `  ${oneLine(own.extra)}` : ''}` : headline(list, now)
+
+    const toggleMinimized = () => setMinimized($, !isMinimized)
+    if (isMinimized) {
+      // One plain line, no frame and no sprite: the title, what it says now, and its numbers
+      return (
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" paddingX={1}>
+          <Text wrap="truncate-end">
+            <Text bold color="claude">{hasCrew ? 'AGENT CREW' : 'AGENT'}</Text>
+            <Text color={own?.alert ? 'warning' : 'subtle'}>{`  ${clip(working || hasCrew ? said : statusLabel(m!), room)}`}</Text>
+          </Text>
+          <Box flexDirection="row" gap={2} alignItems="center" flexShrink={0}>
+            <Text color="subtle">{right}</Text>
+            {Svg ? (
+              <Button key="minimize" label="▸" onPress={toggleMinimized} />
+            ) : (
+              <Button key="minimize" label="▸" hotkey={MIN_KEY} plain onPress={toggleMinimized} />
+            )}
+          </Box>
+        </Box>
+      )
+    }
 
     // The title row alone is framed, in Claude's own color; hiding and clearing live in /crew
     const header = (
@@ -480,6 +504,16 @@ export const register: Register = (on, options) => {
         </Box>
         <Box flexDirection="row" gap={2} alignItems="center" flexShrink={0}>
           <Text color="subtle">{right}</Text>
+          {Svg ? (
+            <Button key="side" label="⇥" onPress={() => setSide($, true)} />
+          ) : (
+            <Button key="side" label="⇥" hotkey={SIDE_KEY} plain onPress={() => setSide($, true)} />
+          )}
+          {Svg ? (
+            <Button key="minimize" label="–" onPress={toggleMinimized} />
+          ) : (
+            <Button key="minimize" label="–" hotkey={MIN_KEY} plain onPress={toggleMinimized} />
+          )}
           {/* The title's arrow shows or hides the subagent rows; alone, it opens Claude's own details */}
           {!hasCrew ? (
             Svg ? (
@@ -499,7 +533,7 @@ export const register: Register = (on, options) => {
     if (!hasCrew) {
       // Claude alone: the arrow opens the details of its turn under the title
       const isOpen = open.includes(MAIN_ID)
-      const details = isOpen ? detailsPanel({ Box, Text }, { a: m!, depth: 0, isOpen, share: 0, est: { main: '', extra: '' }, doing: own ?? doingText(m!, now, 0), color: statusColor(m!) }, now, 2) : null
+      const details = showsDetails(MAIN_ID, isOpen) ? unfold({ Box }, MAIN_ID, detailsPanel({ Box, Text }, { a: m!, depth: 0, isOpen, share: 0, est: { main: '', extra: '' }, doing: own ?? doingText(m!, now, 0), color: statusColor(m!) }, now, 2), now) : null
       if (working) return details ? <Box flexDirection="column">{header}{details}</Box> : header
       return thinLine({ Box, Text, Button }, m!, now, isOpen, () => setOpen($, MAIN_ID, !isOpen), !!Svg, details)
     }
@@ -517,14 +551,14 @@ export const register: Register = (on, options) => {
       }
       const toggle = () => setOpen($, a.id, !isOpen)
       const line = Svg
-        ? desktopRow({ Box, Text, Svg, Button }, row, L, barPx, now, toggle)
+        ? desktopRow({ Box, Text, Svg, Button }, row, L, barPx, now, toggle, () => dismissAgent($, a.id))
         : terminalRow({ Box, Text, Button }, row, L, toggle, ROW_KEYS[index])
       // Every row lives in the same wrapper, open or not, so a toggle never rebuilds the row.
       // Open, the wrapper frames the row and its details in dashed yellow.
       return (
         <Box key={`${a.id}-wrap`} flexDirection="column" borderStyle={isOpen ? 'dashed' : undefined} borderColor={isOpen ? 'warning' : undefined}>
           {line}
-          {isOpen ? detailsPanel({ Box, Text }, row, now, depth * 3 + (Svg ? SPRITE_CELLS : 6) + 1) : null}
+          {showsDetails(a.id, isOpen) ? unfold({ Box }, a.id, detailsPanel({ Box, Text }, row, now, depth * 3 + (Svg ? SPRITE_CELLS : 6) + 1), now) : null}
         </Box>
       )
     })
@@ -536,6 +570,137 @@ export const register: Register = (on, options) => {
       </Box>
     )
   }).catch(($, e, next) => next(e))
+
+  // 8) The side pane: the same crew as a narrow column, one stacked card per agent
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const list = shown(await read($, agents))
+    const m = await read($, main)
+    const open = await read($, expanded)
+    await read($, foldFrame)
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button } = els
+    const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : undefined
+    const now = await $.clock.now()
+    const cols = e.props.bodyColumns || SIDE_COLUMNS
+    const back = Svg ? (
+      <Button key="unside" label="⇤" dimColor hover={{ dimColor: false }} onPress={() => setSide($, false)} />
+    ) : (
+      <Button key="unside" label="⇤" hotkey={SIDE_KEY} plain onPress={() => setSide($, false)} />
+    )
+    if (list.length === 0 && !m) {
+      return (
+        <Box key="title" flexDirection="row" justifyContent="space-between" alignItems="center">
+          <Text color="subtle">No agents yet.</Text>
+          {back}
+        </Box>
+      )
+    }
+    const { working, hasCrew, right, own, said, ownModel } = titleFacts(list, m, now)
+    const runningHelpers = (id: string) => list.filter(a => a.parentId === id && a.status === 'running').length
+    const title = (
+      <Box key="title" flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+          <Text wrap="truncate-end">
+            <Text bold color="claude">{hasCrew ? 'AGENT CREW' : 'AGENT'}</Text>
+            <Text color="subtle">{ownModel ? `  ${ownModel}` : ''}</Text>
+          </Text>
+          {back}
+        </Box>
+        <Text wrap="truncate-end" color={own?.alert ? 'warning' : undefined}>{clip(working || hasCrew ? said : statusLabel(m!), cols)}</Text>
+        <Text wrap="truncate-end" color="subtle">{right}</Text>
+      </Box>
+    )
+    const cards = tree(list).map(({ a, depth }, index) => {
+      const isOpen = open.includes(a.id)
+      const row: RowData = {
+        a,
+        depth,
+        isOpen,
+        share: shownProgress(a, now, history),
+        est: estimateText(a, now, history),
+        doing: doingText(a, now, runningHelpers(a.id)),
+        color: statusColor(a),
+      }
+      return sideCard({ Box, Text, Svg, Button }, row, cols, now, () => setOpen($, a.id, !isOpen), () => dismissAgent($, a.id), ROW_KEYS[index])
+    })
+    return (
+      <Box flexDirection="column" gap={1}>
+        {title}
+        {cards}
+      </Box>
+    )
+  }).catch(($, e, next) => next(e))
+
+  // The person closed the side pane: the crew goes back above the prompt
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE) {
+      await update($, paneUp, () => false)
+      if (e.origin.kind === 'person') {
+        await update($, side, () => false)
+        await $.store.set('side', false).catch(() => undefined)
+      }
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+}
+
+/** One agent in the side pane: the sprite beside four short lines, its details below when open. */
+function sideCard({ Box, Text, Svg, Button }: Els, r: RowData, cols: number, now: number, onToggle: () => void, onDismiss: () => void, hotkey: string | undefined) {
+  const { a, depth, isOpen, share, est, doing, color } = r
+  const running = a.status === 'running'
+  // The sprite (or the terminal's dot) and the gap beside it take this many cells
+  const lead = (Svg ? SPRITE_CELLS : 2) + 1 + depth * 2
+  const textCells = Math.max(10, cols - lead - (isOpen ? 2 : 0))
+  const barCells = Math.max(6, Math.min(16, textCells - 12))
+  const arrow = Svg ? (
+    <Button key={`open-${a.id}`} label={isOpen ? '▾' : '▸'} dimColor hover={{ dimColor: false }} onPress={onToggle} />
+  ) : (
+    <Button key={`open-${a.id}`} label={isOpen ? '▾' : '▸'} hotkey={hotkey} plain onPress={onToggle} />
+  )
+  // A finished agent can be sent off the stage
+  const close = running ? null : Svg ? (
+    <Button key={`close-${a.id}`} label="✕" role="dismiss" dimColor hover={{ dimColor: false }} onPress={onDismiss} />
+  ) : (
+    <Button key={`close-${a.id}`} label="✕" plain dimColor onPress={onDismiss} />
+  )
+  return (
+    <Box key={`${a.id}-wrap`} flexDirection="column" borderStyle={isOpen ? 'dashed' : undefined} borderColor={isOpen ? 'warning' : undefined}>
+      <Box key={a.id} flexDirection="row" gap={1} paddingLeft={depth * 2}>
+        {Svg ? (
+          <Svg source={spriteSvg(a, now)} alt={`${typeLabel(a.type)}: ${doing.main}`} width={SPRITE_W} height={SPRITE_H} />
+        ) : (
+          <Text color={dotColor(a)}>{DOT}</Text>
+        )}
+        <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text wrap="truncate-end">
+              <Text bold color={typeColor(a.type)}>{typeLabel(a.type)}</Text>
+              <Text color="subtle">{modelLabel(a.model) ? `  ${modelLabel(a.model)}` : ''}</Text>
+            </Text>
+            <Box flexDirection="row" gap={1} flexShrink={0}>
+              {arrow}
+              {close}
+            </Box>
+          </Box>
+          <Text bold={depth === 0} dimColor={depth > 0} wrap="truncate-end">{clip(a.description, textCells * (Svg ? DESKTOP_TEXT_ROOM : 1))}</Text>
+          <Text wrap="truncate-end">
+            <Text bold color={doing.alert ? 'warning' : color.theme}>{doing.main}</Text>
+            <Text color="subtle">{doing.extra ? `  ${oneLine(doing.extra)}` : ''}</Text>
+          </Text>
+          <Box flexDirection="row" gap={1} alignItems="center">
+            {Svg ? (
+              <Svg source={barSvg(share, color.raw, running, barCells * 8, barCells, 7)} alt={`${Math.round(share * 100)} percent`} width={barCells * 8} height={7} />
+            ) : (
+              <Text color={color.theme}>{textBar(share, barCells, running)}</Text>
+            )}
+            <Text bold>{`${Math.round(share * 100)}%`}</Text>
+            <Text color={running ? 'text' : 'subtle'}>{est.main}</Text>
+          </Box>
+        </Box>
+      </Box>
+      {showsDetails(a.id, isOpen) ? unfold({ Box }, a.id, detailsPanel({ Box, Text }, r, now, 0), now) : null}
+    </Box>
+  )
 }
 
 // ── Rows ─────────────────────────────────────────────────────
@@ -555,7 +720,7 @@ type RowData = {
 
 const oneLine = (s: string) => s.replace(/\s+/g, ' ')
 
-function desktopRow({ Box, Text, Svg, Button }: Els, r: RowData, L: Layout, barPx: number, now: number, onToggle: () => void) {
+function desktopRow({ Box, Text, Svg, Button }: Els, r: RowData, L: Layout, barPx: number, now: number, onToggle: () => void, onDismiss: () => void) {
   const { a, depth, isOpen, share, est, doing, color } = r
   const helper = depth > 0
   const indent = depth * 3
@@ -603,7 +768,8 @@ function desktopRow({ Box, Text, Svg, Button }: Els, r: RowData, L: Layout, barP
         </Box>
       ) : null}
       {/* The disclosure arrow ends the row: a button, so it works by click and by keyboard */}
-      <Button key={`open-${a.id}`} label={isOpen ? '▾' : '▸'} onPress={onToggle} />
+      <Button key={`open-${a.id}`} label={isOpen ? '▾' : '▸'} dimColor hover={{ dimColor: false }} onPress={onToggle} />
+      {running ? null : <Button key={`close-${a.id}`} label="✕" role="dismiss" dimColor hover={{ dimColor: false }} onPress={onDismiss} />}
     </Box>
   )
 }
@@ -835,9 +1001,72 @@ function setStatus($: EngineInterface, text: string | undefined) {
 /** While the crew is hidden, its one-line summary sits on the status line instead. */
 async function refreshStatus($: EngineInterface) {
   const isHidden = await read($, hidden)
-  const list = await read($, agents)
+  const list = shown(await read($, agents))
   const now = await $.clock.now()
   setStatus($, isHidden ? statusText(list, now, history, showCost ? sumCost(list) : null) : undefined)
+}
+
+/** What the title says and its numbers, shared by the band and the side pane. `m` or `list` is non-empty. */
+function titleFacts(list: readonly Agent[], m: Agent | null, now: number) {
+  const working = m?.status === 'running' ? m : null
+  const summary = crewSummary(list, now, history)
+  const anyRunning = list.some(a => a.status === 'running')
+  const crewCost = showCost ? sumCost(list) : null
+  const hasCrew = list.length > 0
+  // Alone, the title is Claude's own line: how long it has worked and what it spent
+  const mainCost = m && showCost ? costOf(m.model, m.tokens)?.total ?? null : null
+  const right = hasCrew
+    ? [
+        tokenText(sumTokens([...list.map(a => a.tokens), ...(working ? [working.tokens] : [])]), 'tokens'),
+        crewCost !== null ? formatCost(crewCost + (mainCost ?? 0)) : '',
+        anyRunning ? `crew ~${formatDuration(summary.leftMs)} left` : '',
+        `${Math.round(summary.share * 100)}%`,
+      ].filter(Boolean).join('  ·  ')
+    : [
+        formatDuration((m!.endedAt ?? now) - m!.startedAt),
+        tokenText(m!.tokens, 'tokens'),
+        mainCost !== null ? formatCost(mainCost) : '',
+      ].filter(Boolean).join('  ·  ')
+  // What the title says: an approval a subagent waits on first, then Claude's own work, then the crew's state
+  const crewAsks = list.some(a => a.status === 'running' && a.waitingFor)
+  // Claude waiting on the subagents it started (the Agent tool shows no activity of its own)
+  const waitsOn = list.filter(a => !a.parentId && a.status === 'running').length
+  const idle = working && (working.activity === 'thinking' || working.activity === 'starting') && !working.waitingFor
+  const own = !working || crewAsks ? null : idle && waitsOn ? { main: 'Waiting', extra: `on ${waitsOn} agent${waitsOn > 1 ? 's' : ''}`, alert: false } : doingText(working, now, 0)
+  // Claude's own model sits beside the title while it works
+  const ownModel = working ? modelLabel(working.model) : ''
+  const said = own ? `${own.main}${own.extra ? `  ${oneLine(own.extra)}` : ''}` : headline(list, now)
+  return { working, anyRunning, hasCrew, right, own, said, ownModel }
+}
+
+/** Moves the crew into the side pane or back above the prompt, and remembers the choice. */
+async function setSide($: EngineInterface, value: boolean) {
+  await update($, side, () => value)
+  await $.store.set('side', value).catch(() => undefined)
+  await (value ? openPane($) : closePane($))
+}
+
+/** Opens the side pane where the crew lives there and it isn't up yet. */
+async function openPane($: EngineInterface) {
+  if (!(await read($, side)) || (await read($, paneUp))) return
+  const opened = await $.ui.open({ id: PANE, title: 'Agent Crew', columns: SIDE_COLUMNS })
+  await update($, paneUp, () => opened.isPlaced)
+}
+
+/** Closes the side pane, keeping the choice to use it: the next crew opens it again. */
+async function closePane($: EngineInterface) {
+  if (!(await read($, paneUp))) return
+  await update($, paneUp, () => false)
+  await $.ui.close({ id: PANE }).catch(() => undefined)
+}
+
+/** The agents the band shows: cancelled ones drop out of view (they stay in the state). */
+const shown = (list: readonly Agent[]) => list.filter(a => a.status !== 'cancelled')
+
+/** Minimises or restores the band, and remembers the choice for later sessions. */
+async function setMinimized($: EngineInterface, value: boolean) {
+  await update($, minimized, () => value)
+  await $.store.set('minimized', value).catch(() => undefined)
 }
 
 /** One row open at a time: opening a row closes the others. Writes only on a real change. */
@@ -845,7 +1074,74 @@ async function setOpen($: EngineInterface, id: string, open: boolean) {
   const ids = await read($, expanded)
   const already = open ? ids.length === 1 && ids[0] === id : !ids.includes(id)
   if (already) return
+  // The details slide open, and whatever closes slides shut
+  const now = await $.clock.now()
+  for (const x of open ? ids.filter(x => x !== id) : [id]) startFold($, x, false, now)
+  if (open) startFold($, id, true, now)
   await update($, expanded, current => (open ? [id] : current.filter(x => x !== id)))
+}
+
+// ── Unfolding ────────────────────────────────────────────────
+// The surfaces lay a plugin out in text rows and run no transitions of their own, so a details
+// panel slides open by its height in rows: a short run of redraws, eased, then the timer stops.
+const UNFOLD_MS = 160
+const FRAME_MS = 20
+/** Panels sliding now, by row id: which way, and since when. */
+const folds = new Map<string, { open: boolean; at: number }>()
+let foldTimer: { cancel: () => void } | null = null
+
+function startFold($: EngineInterface, id: string, open: boolean, now: number) {
+  folds.set(id, { open, at: now })
+  if (foldTimer) return
+  foldTimer = $.clock.every(FRAME_MS, () => {
+    void (async () => {
+      const t = await $.clock.now()
+      for (const [k, f] of folds) if (t - f.at >= UNFOLD_MS) folds.delete(k)
+      await update($, foldFrame, n => n + 1)
+      if (folds.size === 0) {
+        foldTimer?.cancel()
+        foldTimer = null
+      }
+    })().catch(() => undefined)
+  })
+}
+
+/** Whether a row's details are drawn: open, or still sliding shut. */
+const showsDetails = (id: string, isOpen: boolean) => isOpen || folds.get(id)?.open === false
+
+/** The details as far as they have slid: clipped to a growing (or shrinking) number of rows. */
+function unfold({ Box }: Els, id: string, details: RenderChildren, now: number): RenderChildren {
+  const f = folds.get(id)
+  if (!f) return details
+  const p = Math.min(1, Math.max(0, (now - f.at) / UNFOLD_MS))
+  const eased = 1 - (1 - p) ** 3
+  const rows = rowsOf(details)
+  const shownRows = Math.round(rows * (f.open ? eased : 1 - eased))
+  if (shownRows >= rows) return details
+  if (shownRows <= 0 && !f.open) return null
+  return (
+    <Box key={`${id}-fold`} flexDirection="column" height={Math.max(1, shownRows)} overflow="hidden" flexShrink={0}>
+      {details}
+    </Box>
+  )
+}
+
+/** The rows a details panel takes: one per line it holds (a long line that wraps counts once). */
+function rowsOf(el: unknown): number {
+  const node = el as { children?: unknown; props?: { children?: unknown } } | null
+  const kids = node?.children ?? node?.props?.children
+  const flat = (Array.isArray(kids) ? kids : [kids]).flat(4).filter(k => k !== null && k !== undefined && k !== false)
+  return Math.max(1, flat.length)
+}
+
+/** The ✕ on a finished agent: it leaves the stage, and the pane closes once nobody is left. */
+async function dismissAgent($: EngineInterface, id: string) {
+  folds.delete(id)
+  await update($, agents, list => list.filter(a => a.id !== id))
+  await update($, expanded, ids => ids.filter(x => x !== id))
+  known.delete(id)
+  const left = shown(await read($, agents))
+  if (left.length === 0) await closePane($).catch(() => undefined)
 }
 
 /**
@@ -943,6 +1239,7 @@ async function clearStage($: EngineInterface) {
   await update($, main, m => (m?.demo || m?.status !== 'running' ? null : m))
   await update($, expanded, () => [])
   setStatus($, undefined)
+  await closePane($).catch(() => undefined)
 }
 
 
@@ -978,6 +1275,7 @@ async function startDemo($: EngineInterface) {
   demoTick = null
   await update($, hidden, () => false)
   await update($, agents, list => [...list.filter(a => !a.demo), ...crew.filter((_, i) => DEMO[i].at === 0)])
+  await openPane($).catch(() => undefined)
   // Claude's own line on the title: it reads a file, then waits on its crew. A real turn keeps its own.
   const demoMain: Agent = {
     id: MAIN_ID, type: 'main', description: 'Refactor the login flow', model: 'claude-opus-5-5', status: 'running', activity: 'reading', target: 'LoginView.swift',
