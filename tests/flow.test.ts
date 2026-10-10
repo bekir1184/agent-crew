@@ -258,6 +258,54 @@ test('a cancelled agent leaves the band; the others stay', async ($, on) => {
   await ui.unmount()
 })
 
+test('the side button moves the crew into a narrow pane, and closing the pane brings the band back', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  const saved: Record<string, unknown> = {}
+  on('store.get', ($, e) => ({ value: saved[e.key] }))
+  on('store.set', ($, e) => {
+    saved[e.key] = e.value
+    return { value: undefined }
+  })
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('ui.invalidate', () => ({ value: undefined }))
+  const opens: { id: string; columns?: number }[] = []
+  on('ui.open', ($, e) => {
+    opens.push(e)
+    return { value: { isPlaced: true as const } }
+  })
+  on('ui.close', () => ({ value: undefined }))
+  on('ui.render', () => ({ type: 'Text' as const, props: {}, children: ['ENGINE ROW'] }))
+  on('agent.spawn', () => ({ agentId: 'a1', model: 'claude-haiku-5-5' }))
+  on('agent.list', () => ({ value: [{ id: 'a1', description: 'd', type: 'Explore', status: 'running' }] }))
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn({ prompt: 'p', description: 'Side job', subagentType: 'Explore' })
+  await clock.advance(1_000)
+
+  const band = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
+  await band.press({ key: 'side' })
+  expect(opens.at(-1)).toMatchObject({ id: 'crew', columns: 38 })
+  expect(saved.side).toBe(true)
+  expect(await band.find({ type: 'Text', text: /ENGINE ROW/ })).toBeDefined()
+  await band.unmount()
+
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const pane = await $.ui.mount({ plugin: 'agent-crew', surface, component: 'Pane', requestId: 'crew', props: { title: 'Agent Crew', isFocused: false, bodyColumns: 38, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} }, viewport: VIEW })
+    expect(await pane.find({ type: 'Text', text: /Side job/ })).toBeDefined()
+    expect(await pane.find({ key: 'open-a1' })).toBeDefined()
+    await pane.unmount()
+  }
+
+  // The pane's ⇤ moves the crew back: the band returns, and the next session starts without the pane
+  const pane = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'Pane', requestId: 'crew', props: { title: 'Agent Crew', isFocused: false, bodyColumns: 38, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} }, viewport: VIEW })
+  await pane.press({ key: 'unside' })
+  expect(saved.side).toBe(false)
+  await pane.unmount()
+  const again = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
+  expect(await again.find({ key: 'open-a1' })).toBeDefined()
+  await again.unmount()
+})
+
 test('a quiet agent is flagged without being retired', async ($, on) => {
   const w = await world($, on, () => [{ id: 'a1', status: 'running' }])
   await w.clock.advance(130_000)

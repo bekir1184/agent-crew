@@ -68,6 +68,8 @@ declare module 'claude-code' {
       expanded: string[]
       collapsed: boolean
       minimized: boolean
+      side: boolean
+      paneUp: boolean
     }
   }
 }
