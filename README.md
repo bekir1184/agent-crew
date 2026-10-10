@@ -30,7 +30,7 @@ While Claude works, the framed line shows what it's doing this very second. When
 
 ## The crew
 
-When Claude hands work to subagents, they line up below, one row each. Each row names the model it runs on, so you can tell Opus from Haiku at a glance. Helpers started by a subagent tuck in under their parent. Too busy? The arrow on the title folds them away.
+When Claude hands work to subagents, they line up below, one row each. Each row names the model it runs on, so you can tell Opus from Haiku at a glance. Helpers started by a subagent tuck in under their parent. Too busy? The arrow on the title folds them away, and the – button shrinks the whole band to one plain line (it stays that way in later sessions until you press ▸). Cancelled agents leave the stage right away.
 
 Each critter holds the tool it's using:
 
@@ -78,7 +78,7 @@ Turn on **Show estimated cost** in the settings and each row also gets a ≈ dol
 
 **Settings** live in `/plugin configure agent-crew@agent-crew`: show Claude's own line (on), show estimated cost (off).
 
-**In the terminal** there's no pixel art, just a colored dot per row. Press `ctrl+x tab` to reach the crew, then the letter on an arrow: `h` for the title, `a`, `b`, `c` for the rows.
+**In the terminal** there's no pixel art, just a colored dot per row. Press `ctrl+x tab` to reach the crew, then the letter on an arrow: `h` for the title, `z` to minimise, `a`, `b`, `c` for the rows.
 
 ## Development
 

@@ -20,6 +20,8 @@ const hidden = atom({ plugin: 'agent-crew', key: 'hidden' } as const, false)
 const expanded = atom({ plugin: 'agent-crew', key: 'expanded' } as const, [])
 /** The title row's arrow: hides the agent rows below it, leaving the title as the whole view. */
 const collapsed = atom({ plugin: 'agent-crew', key: 'collapsed' } as const, false)
+/** The title's minimise button: the whole band shrinks to one plain line. Kept across sessions in $.store. */
+const minimized = atom({ plugin: 'agent-crew', key: 'minimized' } as const, false)
 
 /** Settings from the /config menu (userConfig); a change there reloads the module. */
 let showCost = false
@@ -108,6 +110,8 @@ const DESKTOP_TEXT_ROOM = 2
  * band button, so a message starting with "1." would open a row.
  */
 const TITLE_KEY = 'h'
+/** The terminal's key for the minimise button. */
+const MIN_KEY = 'z'
 const ROW_KEYS = [...'abcdefgijklm']
 
 /** A desktop row is exactly this many text rows tall, with the 34 px sprite centered in it. */
@@ -131,6 +135,8 @@ export const register: Register = (on, options) => {
     })
     cwd = e.cwd ?? ''
     history = sanitizeHistory(await $.store.get('history').catch(() => null))
+    const wasMinimized = (await $.store.get('minimized').catch(() => null)) === true
+    if (wasMinimized !== (await read($, minimized))) await update($, minimized, () => wasMinimized)
     const now = await $.clock.now()
     const listed = await listAgents($)
     // A demo's timer died with the previous module; an agent that ended unreported is closed
@@ -413,7 +419,7 @@ export const register: Register = (on, options) => {
     // Cheap checks first: while hidden, the drawing doesn't subscribe to the agent list
     const isHidden = await read($, hidden)
     if (isHidden || e.props.hasSurvey) return next(e)
-    const list = await read($, agents)
+    const list = shown(await read($, agents))
     const m = await read($, main)
     const working = m?.status === 'running' ? m : null
     if (list.length === 0 && !m) return next(e)
@@ -448,6 +454,7 @@ export const register: Register = (on, options) => {
           mainCost !== null ? formatCost(mainCost) : '',
         ].filter(Boolean).join('  ·  ')
     const isCollapsed = await read($, collapsed)
+    const isMinimized = await read($, minimized)
     // What the title says: an approval a subagent waits on first, then Claude's own work, then the crew's state
     const crewAsks = list.some(a => a.status === 'running' && a.waitingFor)
     // Claude waiting on the subagents it started (the Agent tool shows no activity of its own)
@@ -458,6 +465,27 @@ export const register: Register = (on, options) => {
     const ownModel = working ? modelLabel(working.model) : ''
     const room = Math.max(12, Math.floor(((e.props.bodyColumns || e.viewport?.columns || 120) - right.length - 26 - ownModel.length) * (Svg ? 0.75 * DESKTOP_TEXT_ROOM : 1)))
     const said = own ? `${own.main}${own.extra ? `  ${oneLine(own.extra)}` : ''}` : headline(list, now)
+
+    const toggleMinimized = () => setMinimized($, !isMinimized)
+    if (isMinimized) {
+      // One plain line, no frame and no sprite: the title, what it says now, and its numbers
+      return (
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" paddingX={1}>
+          <Text wrap="truncate-end">
+            <Text bold color="claude">{hasCrew ? 'AGENT CREW' : 'AGENT'}</Text>
+            <Text color={own?.alert ? 'warning' : 'subtle'}>{`  ${clip(working || hasCrew ? said : statusLabel(m!), room)}`}</Text>
+          </Text>
+          <Box flexDirection="row" gap={2} alignItems="center" flexShrink={0}>
+            <Text color="subtle">{right}</Text>
+            {Svg ? (
+              <Button key="minimize" label="▸" onPress={toggleMinimized} />
+            ) : (
+              <Button key="minimize" label="▸" hotkey={MIN_KEY} plain onPress={toggleMinimized} />
+            )}
+          </Box>
+        </Box>
+      )
+    }
 
     // The title row alone is framed, in Claude's own color; hiding and clearing live in /crew
     const header = (
@@ -480,6 +508,11 @@ export const register: Register = (on, options) => {
         </Box>
         <Box flexDirection="row" gap={2} alignItems="center" flexShrink={0}>
           <Text color="subtle">{right}</Text>
+          {Svg ? (
+            <Button key="minimize" label="–" onPress={toggleMinimized} />
+          ) : (
+            <Button key="minimize" label="–" hotkey={MIN_KEY} plain onPress={toggleMinimized} />
+          )}
           {/* The title's arrow shows or hides the subagent rows; alone, it opens Claude's own details */}
           {!hasCrew ? (
             Svg ? (
@@ -835,9 +868,18 @@ function setStatus($: EngineInterface, text: string | undefined) {
 /** While the crew is hidden, its one-line summary sits on the status line instead. */
 async function refreshStatus($: EngineInterface) {
   const isHidden = await read($, hidden)
-  const list = await read($, agents)
+  const list = shown(await read($, agents))
   const now = await $.clock.now()
   setStatus($, isHidden ? statusText(list, now, history, showCost ? sumCost(list) : null) : undefined)
+}
+
+/** The agents the band shows: cancelled ones drop out of view (they stay in the state). */
+const shown = (list: readonly Agent[]) => list.filter(a => a.status !== 'cancelled')
+
+/** Minimises or restores the band, and remembers the choice for later sessions. */
+async function setMinimized($: EngineInterface, value: boolean) {
+  await update($, minimized, () => value)
+  await $.store.set('minimized', value).catch(() => undefined)
 }
 
 /** One row open at a time: opening a row closes the others. Writes only on a real change. */

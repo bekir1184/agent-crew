@@ -72,7 +72,9 @@ test('an agent that vanished without a turn.complete is retired', async ($, on) 
   await $.agent.spawn({ prompt: 'p', description: 'Lost agent', subagentType: 'Explore' })
   await clock.advance(45_000)
   const ui = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
-  expect(await ui.find({ type: 'Text', text: /^Cancelled$/ })).toBeDefined()
+  // Retired as cancelled, it leaves the band, and with nobody else there the engine draws its own
+  expect(await ui.find({ type: 'Text', text: /Lost agent/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /ENGINE ROW/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -217,6 +219,42 @@ test("the title's arrow hides and shows the agent rows", async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /AGENT CREW/ })).toBeDefined()
   await ui.press({ key: 'collapse' })
   expect(await ui.find({ key: 'open-a1' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the minimise button shrinks the whole band to one line, and the choice is kept', async ($, on) => {
+  const w = await world($, on, () => [{ id: 'a1', status: 'running' }])
+  await w.clock.advance(1_000)
+  const ui = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
+  await ui.press({ key: 'minimize' })
+  expect(await ui.find({ key: 'open-a1' })).toBeUndefined()
+  expect(await ui.find({ key: 'collapse' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /AGENT CREW/ })).toBeDefined()
+  expect(w.saved.minimized).toBe(true)
+  await ui.press({ key: 'minimize' })
+  expect(await ui.find({ key: 'open-a1' })).toBeDefined()
+  expect(w.saved.minimized).toBe(false)
+  await ui.unmount()
+})
+
+test('a cancelled agent leaves the band; the others stay', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('ui.invalidate', () => ({ value: undefined }))
+  on('ui.render', () => ({ type: 'Text' as const, props: {}, children: ['ENGINE ROW'] }))
+  let spawned = 0
+  on('agent.spawn', () => ({ agentId: `a${++spawned}`, model: 'claude-haiku-5-5' }))
+  // The engine reports the first one killed (stopped by the person), the second still running
+  on('agent.list', () => ({ value: [{ id: 'a1', description: 'd', type: 'Explore', status: 'killed' }, { id: 'a2', description: 'd', type: 'Explore', status: 'running' }] }))
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn({ prompt: 'p', description: 'Stopped', subagentType: 'Explore' })
+  await $.agent.spawn({ prompt: 'p', description: 'Still going', subagentType: 'Explore' })
+  await clock.advance(11_000) // the next list check
+  const ui = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
+  expect(await ui.find({ key: 'open-a1' })).toBeUndefined()
+  expect(await ui.find({ key: 'open-a2' })).toBeDefined()
   await ui.unmount()
 })
 
