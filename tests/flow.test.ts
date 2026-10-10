@@ -279,10 +279,12 @@ test('the crew starts in the side pane; ⇤ brings the band back and ⇥ moves i
   on('agent.spawn', () => ({ agentId: 'a1', model: 'claude-haiku-5-5' }))
   on('agent.list', () => ({ value: [{ id: 'a1', description: 'd', type: 'Explore', status: 'running' }] }))
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  // No pane until an agent starts
+  expect(opens.length).toBe(0)
   await $.agent.spawn({ prompt: 'p', description: 'Side job', subagentType: 'Explore' })
   await clock.advance(1_000)
 
-  // The side pane is the default: it opens with the session, and the band stays empty
+  // The side pane is the default: it opens with the first agent, and the band stays empty
   expect(opens.at(-1)).toMatchObject({ id: 'crew', columns: 38 })
   const band = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
   expect(await band.find({ type: 'Text', text: /ENGINE ROW/ })).toBeDefined()

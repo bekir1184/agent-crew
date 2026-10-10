@@ -146,9 +146,12 @@ export const register: Register = (on, options) => {
     history = sanitizeHistory(await $.store.get('history').catch(() => null))
     const wasMinimized = (await $.store.get('minimized').catch(() => null)) === true
     if (wasMinimized !== (await read($, minimized))) await update($, minimized, () => wasMinimized)
-    // The crew starts in the side pane unless the person moved it back above the prompt (⇤);
-    // where the engine doesn't place the pane (a narrow window), the band shows instead
-    if ((await $.store.get('side').catch(() => null)) !== false) await setSide($, true).catch(() => undefined)
+    // The crew lives in the side pane unless the person moved it back above the prompt (⇤). The pane
+    // opens when an agent starts; where the engine doesn't place it (a narrow window), the band shows
+    const inSide = (await $.store.get('side').catch(() => null)) !== false
+    if (inSide !== (await read($, side))) await update($, side, () => inSide)
+    // After a reload mid-crew the pane comes back (an unload closed it)
+    if ((await read($, agents)).some(a => a.status === 'running')) await openPane($).catch(() => undefined)
     const now = await $.clock.now()
     const listed = await listAgents($)
     // A demo's timer died with the previous module; an agent that ended unreported is closed
@@ -238,6 +241,7 @@ export const register: Register = (on, options) => {
     for (const a of kept) known.add(a.id)
     for (const id of closedTurn.keys()) if (!known.has(id)) closedTurn.delete(id)
     startTicker($)
+    await openPane($).catch(() => undefined)
     return result
   }).catch(($, e, next) => next(e))
 
@@ -396,6 +400,7 @@ export const register: Register = (on, options) => {
       pending.clear()
       closedTurn.clear()
       setStatus($, undefined)
+      await closePane($).catch(() => undefined)
     }
     const open = await read($, expanded)
     if (open.length) await update($, expanded, () => [])
@@ -1024,13 +1029,21 @@ function titleFacts(list: readonly Agent[], m: Agent | null, now: number) {
 async function setSide($: EngineInterface, value: boolean) {
   await update($, side, () => value)
   await $.store.set('side', value).catch(() => undefined)
-  if (value) {
-    const opened = await $.ui.open({ id: PANE, title: 'Agent Crew', columns: SIDE_COLUMNS })
-    await update($, paneUp, () => opened.isPlaced)
-  } else {
-    await update($, paneUp, () => false)
-    await $.ui.close({ id: PANE }).catch(() => undefined)
-  }
+  await (value ? openPane($) : closePane($))
+}
+
+/** Opens the side pane where the crew lives there and it isn't up yet. */
+async function openPane($: EngineInterface) {
+  if (!(await read($, side)) || (await read($, paneUp))) return
+  const opened = await $.ui.open({ id: PANE, title: 'Agent Crew', columns: SIDE_COLUMNS })
+  await update($, paneUp, () => opened.isPlaced)
+}
+
+/** Closes the side pane, keeping the choice to use it: the next crew opens it again. */
+async function closePane($: EngineInterface) {
+  if (!(await read($, paneUp))) return
+  await update($, paneUp, () => false)
+  await $.ui.close({ id: PANE }).catch(() => undefined)
 }
 
 /** The agents the band shows: cancelled ones drop out of view (they stay in the state). */
@@ -1145,6 +1158,7 @@ async function clearStage($: EngineInterface) {
   await update($, main, m => (m?.demo || m?.status !== 'running' ? null : m))
   await update($, expanded, () => [])
   setStatus($, undefined)
+  await closePane($).catch(() => undefined)
 }
 
 
@@ -1180,6 +1194,7 @@ async function startDemo($: EngineInterface) {
   demoTick = null
   await update($, hidden, () => false)
   await update($, agents, list => [...list.filter(a => !a.demo), ...crew.filter((_, i) => DEMO[i].at === 0)])
+  await openPane($).catch(() => undefined)
   // Claude's own line on the title: it reads a file, then waits on its crew. A real turn keeps its own.
   const demoMain: Agent = {
     id: MAIN_ID, type: 'main', description: 'Refactor the login flow', model: 'claude-opus-5-5', status: 'running', activity: 'reading', target: 'LoginView.swift',
