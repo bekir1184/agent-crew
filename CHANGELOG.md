@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-17
+
+Thanks to [@VlcekM](https://github.com/VlcekM) for the side pane, minimise,
+dismiss and sliding details ([#6](https://github.com/bekir1184/agent-crew/pull/6)).
+
+### Added
+
+- ⇥ moves the crew into a narrow side pane beside the conversation, one card
+  per agent; ⇤ (or closing the pane) brings it back above the prompt. The
+  crew starts above the prompt, and the choice is kept across sessions.
+- – shrinks the band to one plain line, kept across sessions until ▸.
+- A finished agent's ✕ sends it off the stage.
+- Terminal keys: `z` to minimise, `y` to move to the side pane.
+
+### Changed
+
+- Cancelled agents leave the stage right away.
+- Details slide open and shut; the chrome buttons stay dim until hovered.
+
 ## [0.3.0] - 2026-10-09
 
 ### Added

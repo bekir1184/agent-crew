@@ -30,7 +30,9 @@ While Claude works, the framed line shows what it's doing this very second. When
 
 ## The crew
 
-When Claude hands work to subagents, they line up below, one row each. Each row names the model it runs on, so you can tell Opus from Haiku at a glance. Helpers started by a subagent tuck in under their parent. Too busy? The arrow on the title folds them away, and the – button shrinks the whole band to one plain line (it stays that way in later sessions until you press ▸). Cancelled agents leave the stage right away. The crew lives in a narrow pane beside the conversation, one stacked card per agent: it opens when an agent starts and closes when the finished crew leaves the stage; ⇤ (or closing the pane) moves it above the prompt, and ⇥ moves it back. In a window too narrow for the pane, it shows above the prompt.
+When Claude hands work to subagents, they line up below, one row each. Each row names the model it runs on, so you can tell Opus from Haiku at a glance. Helpers started by a subagent tuck in under their parent. Cancelled agents leave the stage right away.
+
+Too busy? The arrow on the title folds the rows away, and – shrinks the whole band to one plain line (▸ brings it back). Prefer it out of the way? ⇥ moves the crew into a narrow pane beside the conversation, one card per agent, and ⇤ brings it back above the prompt. Both choices stick for later sessions.
 
 Each critter holds the tool it's using:
 
@@ -50,7 +52,7 @@ When an agent stops to ask for permission, it says so: a yellow question bubble,
 
 ## The details
 
-Every row has an arrow. It slides open everything the row had no room for, and a finished agent gets a ✕ to send it off the stage: the full task, its to-do list, the files it touched, and its tokens.
+Every row has an arrow. It slides open everything the row had no room for: the full task, its to-do list, the files it touched, and its tokens. A finished agent also gets a ✕ to send it off the stage.
 
 <img src="docs/details.svg" alt="A row opens into a panel: task, current step, checklist, changed files, token breakdown and run summary" width="100%">
 
