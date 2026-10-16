@@ -148,9 +148,9 @@ export const register: Register = (on, options) => {
     history = sanitizeHistory(await $.store.get('history').catch(() => null))
     const wasMinimized = (await $.store.get('minimized').catch(() => null)) === true
     if (wasMinimized !== (await read($, minimized))) await update($, minimized, () => wasMinimized)
-    // The crew lives in the side pane unless the person moved it back above the prompt (⇤). The pane
+    // The crew lives above the prompt unless the person moved it to the side pane (⇥). The pane
     // opens when an agent starts; where the engine doesn't place it (a narrow window), the band shows
-    const inSide = (await $.store.get('side').catch(() => null)) !== false
+    const inSide = (await $.store.get('side').catch(() => null)) === true
     if (inSide !== (await read($, side))) await update($, side, () => inSide)
     // After a reload mid-crew the pane comes back (an unload closed it)
     if ((await read($, agents)).some(a => a.status === 'running')) await openPane($).catch(() => undefined)

@@ -258,7 +258,7 @@ test('a cancelled agent leaves the band; the others stay', async ($, on) => {
   await ui.unmount()
 })
 
-test('the crew starts in the side pane; ⇤ brings the band back and ⇥ moves it to the side again', async ($, on) => {
+test('the crew starts above the prompt; ⇥ moves it to the side pane and ⇤ brings the band back', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   const saved: Record<string, unknown> = {}
   on('store.get', ($, e) => ({ value: saved[e.key] }))
@@ -284,9 +284,14 @@ test('the crew starts in the side pane; ⇤ brings the band back and ⇥ moves i
   await $.agent.spawn({ prompt: 'p', description: 'Side job', subagentType: 'Explore' })
   await clock.advance(1_000)
 
-  // The side pane is the default: it opens with the first agent, and the band stays empty
-  expect(opens.at(-1)).toMatchObject({ id: 'crew', columns: 38 })
+  // The band is the default: the crew shows above the prompt and no pane opens
+  expect(opens.length).toBe(0)
   const band = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
+  expect(await band.find({ key: 'open-a1' })).toBeDefined()
+  // The band's ⇥ moves it to the side pane, and the choice is kept
+  await band.press({ key: 'side' })
+  expect(opens.at(-1)).toMatchObject({ id: 'crew', columns: 38 })
+  expect(saved.side).toBe(true)
   expect(await band.find({ type: 'Text', text: /ENGINE ROW/ })).toBeDefined()
   await band.unmount()
 
@@ -297,18 +302,13 @@ test('the crew starts in the side pane; ⇤ brings the band back and ⇥ moves i
     await pane.unmount()
   }
 
-  // The pane's ⇤ moves the crew back: the band returns, and the next session starts without the pane
+  // The pane's ⇤ moves the crew back above the prompt
   const pane = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'Pane', requestId: 'crew', props: { title: 'Agent Crew', isFocused: false, bodyColumns: 38, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} }, viewport: VIEW })
   await pane.press({ key: 'unside' })
   expect(saved.side).toBe(false)
   await pane.unmount()
   const again = await $.ui.mount({ plugin: 'agent-crew', surface: 'desktop', component: 'AbovePrompt', props: BAND, viewport: VIEW })
   expect(await again.find({ key: 'open-a1' })).toBeDefined()
-  // and the band's ⇥ moves it to the side again
-  const opened = opens.length
-  await again.press({ key: 'side' })
-  expect(opens.length).toBe(opened + 1)
-  expect(saved.side).toBe(true)
   await again.unmount()
 })
 
