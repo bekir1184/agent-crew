@@ -67,6 +67,10 @@ declare module 'claude-code' {
       hidden: boolean
       expanded: string[]
       collapsed: boolean
+      minimized: boolean
+      side: boolean
+      paneUp: boolean
+      foldFrame: number
     }
   }
 }
