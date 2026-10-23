@@ -10,6 +10,8 @@ See who is doing what, how far along they are, and how long is left.</p>
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/Claude%20Code-%E2%89%A5%202.1.293-d97757" alt="Claude Code 2.1.293 or newer">
+  <a href="https://mods.aidojo.si/mods/bekir1184--agent-crew--agent-crew/"><img src="https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/bekir1184--agent-crew--agent-crew-reach.svg" alt="reach"></a>
+  <a href="https://mods.aidojo.si/mods/bekir1184--agent-crew--agent-crew/"><img src="https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/bekir1184--agent-crew--agent-crew-validates.svg" alt="validates"></a>
 </p>
 
 ## Install
